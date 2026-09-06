@@ -32,6 +32,9 @@ REFERENCES_COLUMNS = ["entry_id", "image_path", "note", "added_at"]
 BEATS_SHEET = "Beats"
 BEATS_COLUMNS = ["order", "beat", "start_s", "end_s", "duration_s", "source", "notes"]
 
+CHARACTERS_SHEET = "Characters"
+CHARACTERS_COLUMNS = ["trigger_id", "display_name", "working_note", "created_at", "updated_at"]
+
 
 def _open_or_create_workbook(path: str) -> Workbook:
     if os.path.exists(path):
@@ -223,6 +226,95 @@ def add_reference(path: str, entry_id: str, image_path: str, note: str) -> None:
     worksheet.cell(row, _col_index(worksheet, "image_path"), image_path)
     worksheet.cell(row, _col_index(worksheet, "note"), note)
     worksheet.cell(row, _col_index(worksheet, "added_at"), _timestamp())
+    workbook.save(path)
+
+
+
+def list_characters(path: str) -> list:
+    return _read_sheet_rows(path, CHARACTERS_SHEET, CHARACTERS_COLUMNS)
+
+
+def get_character(path: str, trigger_id: str) -> dict:
+    normalized = (trigger_id or "").strip()
+    return next((row for row in list_characters(path) if row.get("trigger_id") == normalized), {})
+
+
+def _require_character_trigger(trigger_id: str) -> str:
+    normalized = (trigger_id or "").strip()
+    if not normalized.startswith("CHAR:") or len(normalized) <= len("CHAR:"):
+        raise ValueError("Character trigger must start with CHAR:, for example CHAR:alistair_pig.")
+    return normalized
+
+
+def create_character(path: str, trigger_id: str, display_name: str, working_note: str) -> None:
+    trigger_id = _require_character_trigger(trigger_id)
+    if get_character(path, trigger_id):
+        raise ValueError(f"{trigger_id} already exists.")
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, CHARACTERS_SHEET, CHARACTERS_COLUMNS)
+    row = worksheet.max_row + 1
+    now = _timestamp()
+    values = {
+        "trigger_id": trigger_id,
+        "display_name": (display_name or "").strip(),
+        "working_note": (working_note or "").strip(),
+        "created_at": now,
+        "updated_at": now,
+    }
+    for column, value in values.items():
+        worksheet.cell(row, _col_index(worksheet, column), value)
+    workbook.save(path)
+
+
+def update_character(path: str, trigger_id: str, display_name: str, working_note: str) -> None:
+    trigger_id = _require_character_trigger(trigger_id)
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, CHARACTERS_SHEET, CHARACTERS_COLUMNS)
+    row = _find_row(worksheet, _col_index(worksheet, "trigger_id"), trigger_id)
+    if row is None:
+        raise ValueError(f"{trigger_id} does not exist.")
+    worksheet.cell(row, _col_index(worksheet, "display_name"), (display_name or "").strip())
+    worksheet.cell(row, _col_index(worksheet, "working_note"), (working_note or "").strip())
+    worksheet.cell(row, _col_index(worksheet, "updated_at"), _timestamp())
+    workbook.save(path)
+
+
+def rename_character(path: str, old_trigger_id: str, new_trigger_id: str) -> None:
+    old_trigger_id = _require_character_trigger(old_trigger_id)
+    new_trigger_id = _require_character_trigger(new_trigger_id)
+    if old_trigger_id == new_trigger_id:
+        return
+    workbook = _open_or_create_workbook(path)
+    characters = _ensure_sheet(workbook, CHARACTERS_SHEET, CHARACTERS_COLUMNS)
+    row = _find_row(characters, _col_index(characters, "trigger_id"), old_trigger_id)
+    if row is None:
+        raise ValueError(f"{old_trigger_id} does not exist.")
+    if _find_row(characters, _col_index(characters, "trigger_id"), new_trigger_id) is not None:
+        raise ValueError(f"{new_trigger_id} already exists.")
+    characters.cell(row, _col_index(characters, "trigger_id"), new_trigger_id)
+    characters.cell(row, _col_index(characters, "updated_at"), _timestamp())
+    for sheet_name, columns in ((ASSETS_SHEET, ASSETS_COLUMNS), (PANELS_SHEET, PANELS_COLUMNS), (REFERENCES_SHEET, REFERENCES_COLUMNS)):
+        if sheet_name not in workbook.sheetnames:
+            continue
+        worksheet = _ensure_sheet(workbook, sheet_name, columns)
+        id_col = _col_index(worksheet, "entry_id")
+        for item_row in range(2, worksheet.max_row + 1):
+            if worksheet.cell(item_row, id_col).value == old_trigger_id:
+                worksheet.cell(item_row, id_col, new_trigger_id)
+    workbook.save(path)
+
+
+def delete_character(path: str, trigger_id: str) -> None:
+    trigger_id = _require_character_trigger(trigger_id)
+    workbook = _open_or_create_workbook(path)
+    for sheet_name, columns in ((CHARACTERS_SHEET, CHARACTERS_COLUMNS), (ASSETS_SHEET, ASSETS_COLUMNS), (PANELS_SHEET, PANELS_COLUMNS), (REFERENCES_SHEET, REFERENCES_COLUMNS)):
+        if sheet_name not in workbook.sheetnames:
+            continue
+        worksheet = _ensure_sheet(workbook, sheet_name, columns)
+        key_col = _col_index(worksheet, "trigger_id" if sheet_name == CHARACTERS_SHEET else "entry_id")
+        for row in range(worksheet.max_row, 1, -1):
+            if worksheet.cell(row, key_col).value == trigger_id:
+                worksheet.delete_rows(row, 1)
     workbook.save(path)
 
 

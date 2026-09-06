@@ -261,19 +261,93 @@ def on_entry_type_change(entry_type):
         template = composer.get_template(entry_type)
         choices = [panel["key"] for panel in template]
         return (
-            gr.update(visible=True),
+            gr.update(visible=True), gr.update(visible=False),
             gr.update(choices=choices, value=choices[0] if choices else None),
-            gr.update(visible=True),
-            gr.update(value=CONCEPT_STAGE),
-            build_context(entry_type),
+            gr.update(visible=True), gr.update(value=CONCEPT_STAGE), build_context(entry_type),
         )
     return (
-        gr.update(visible=False),
-        gr.update(choices=[], value=None),
-        gr.update(visible=False),
-        gr.update(),
-        build_context(entry_type),
+        gr.update(visible=False), gr.update(visible=True),
+        gr.update(choices=[], value=None), gr.update(visible=False), gr.update(), build_context(entry_type),
     )
+
+
+
+def character_choices():
+    return [(f"{row.get('display_name') or row['trigger_id']} — {row['trigger_id']}", row["trigger_id"])
+            for row in store.list_characters(CFG.storyboard_path)]
+
+
+def select_character_ui(trigger_id):
+    character = store.get_character(CFG.storyboard_path, trigger_id)
+    if not character:
+        return "", "", "", "No character selected."
+    return (trigger_id, character.get("display_name") or "", character.get("working_note") or "",
+            f"Active trigger: `{trigger_id}`. This is the identity used for future LoRA training and prompting.")
+
+
+def create_character_ui(trigger_id, display_name, working_note):
+    try:
+        store.create_character(CFG.storyboard_path, trigger_id, display_name, working_note)
+        trigger_id = trigger_id.strip()
+        return (gr.update(choices=character_choices(), value=trigger_id), trigger_id, display_name.strip(),
+                working_note.strip(), "", "", "", f"Created and selected `{trigger_id}`.")
+    except ValueError as error:
+        return (gr.update(), "", "", "", gr.update(), gr.update(), gr.update(), f"⚠️ {error}")
+
+
+def save_character_ui(trigger_id, display_name, working_note):
+    try:
+        store.update_character(CFG.storyboard_path, trigger_id, display_name, working_note)
+        return gr.update(choices=character_choices(), value=trigger_id), "Character details saved."
+    except ValueError as error:
+        return gr.update(), f"⚠️ {error}"
+
+
+def rename_character_ui(trigger_id, new_trigger_id):
+    try:
+        store.rename_character(CFG.storyboard_path, trigger_id, new_trigger_id)
+        new_trigger_id = new_trigger_id.strip()
+        character = store.get_character(CFG.storyboard_path, new_trigger_id)
+        return (gr.update(choices=character_choices(), value=new_trigger_id), new_trigger_id,
+                character.get("display_name") or "", character.get("working_note") or "", "",
+                f"Renamed character trigger to `{new_trigger_id}`.")
+    except ValueError as error:
+        return gr.update(), trigger_id, gr.update(), gr.update(), gr.update(), f"⚠️ {error}"
+
+
+def delete_character_ui(trigger_id, confirmed):
+    if not confirmed:
+        return gr.update(), gr.update(), gr.update(), gr.update(), "⚠️ Tick the confirmation box before deleting."
+    try:
+        store.delete_character(CFG.storyboard_path, trigger_id)
+        return gr.update(choices=character_choices(), value=None), "", "", "", "Character records deleted. Image files were kept."
+    except ValueError as error:
+        return gr.update(), gr.update(), gr.update(), gr.update(), f"⚠️ {error}"
+
+
+def draft_prompt_brief(target_model, entry_id, display_name, working_note, positive_prompt, negative_prompt):
+    identity = display_name.strip() or entry_id.strip() or "the character"
+    trigger = entry_id.strip() or "CHAR:your_trigger"
+    note = working_note.strip() or "No additional continuity note supplied."
+    positive = positive_prompt.strip() or "Describe the character, composition, wardrobe, pose, style, and lighting."
+    negative = negative_prompt.strip() or "List anatomy, style, rendering, or continuity failures to avoid."
+    return f'''TARGET: {target_model}
+
+Create a production-ready visual prompt for {identity}. Preserve the canonical trigger exactly: {trigger}.
+
+Continuity note: {note}
+
+Positive prompt draft:
+{positive}
+
+Negative prompt draft:
+{negative}
+
+Return:
+1. A refined positive prompt, with {trigger} placed naturally near the beginning.
+2. A concise negative prompt.
+3. A short continuity checklist for the next panel or shot.
+Do not invent a new character identity, wardrobe, or art direction unless requested.'''
 
 
 def on_build_stage_change(build_stage):
@@ -534,7 +608,7 @@ body, .gradio-container {
     color: var(--horizon-navy) !important;
 }
 .step-card h1, .step-card h2, .step-card h3, .step-card h4,
-.step-card p, .step-card span, .step-card label, .step-card legend {
+.step-card p, .step-card span, .step-card legend {
     color: var(--horizon-navy) !important;
 }
 .step-card h4 { margin-top: 0 !important; }
@@ -583,6 +657,19 @@ body, .gradio-container {
 .build-context-master { border-left-color: var(--sea-glass); }
 .build-context-prop { border-left-color: #B9824A; }
 .build-context-shot { border-left-color: var(--horizon-orange); }
+
+.stage-guide {
+    background: #FFF9EA;
+    border: 1px solid var(--weathered-blue-gray);
+    border-left: 6px solid var(--signal-amber);
+    border-radius: 10px;
+    color: var(--horizon-navy);
+    line-height: 1.5;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+}
+.stage-guide strong { color: var(--horizon-navy); }
+.character-manager { background: #FFF9EA !important; border: 1px solid var(--weathered-blue-gray) !important; border-radius: 10px; padding: 12px !important; }
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
@@ -819,83 +906,66 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         build_context_banner = gr.HTML(build_context("CHAR"))
 
         with gr.Group(elem_classes=["step-card", "step-1"]):
-            gr.Markdown("#### Step 1 — Name what you're making")
-            with gr.Row():
-                entry_id = gr.Textbox(
-                    label="Name",
-                    placeholder="e.g. CHAR:pig",
-                    scale=9,
-                )
-                id_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
-                entry_type = gr.Dropdown(label="Type", choices=["CHAR", "MASTER", "PROP", "SHOT"],
-                                          value="CHAR", info="This changes the build workflow shown above.")
-            id_help = gr.Markdown(
-                "Use `CHAR:name` for a character (e.g. `CHAR:pig`), `MASTER:name` "
-                "for a recurring backdrop (e.g. `MASTER:farm_field`), or `PROP:name` "
-                "for a recurring key object (e.g. `PROP:crate`) — all three build a "
-                "full reference sheet, panel by panel. Use a shot number (e.g. `1.1`) "
-                "for a single scene image. Reusing the same name updates that entry "
-                "instead of creating a new one.",
-                visible=False, elem_classes=["help-panel"])
-            id_state = gr.State(False)
-            id_btn.click(_toggle_help, inputs=id_state, outputs=[id_state, id_help])
-
-            with gr.Row():
-                beat = gr.Textbox(label="Section / beat (optional)")
-                reused_from = gr.Textbox(
-                    label="Chained from (optional)",
-                    placeholder="e.g. 1.1",
-                    info="The prior shot or asset whose locked end/design this continues.",
-                )
-            description = gr.Textbox(label="Short description (for your own reference)", lines=2,
-                                      placeholder="e.g. 'the pig, front-facing, tweed cap'")
-
-            # --- CHAR / MASTER only: two-stage build (concept, then panels) ---
-            with gr.Group(visible=True) as panel_group:
-                gr.Markdown(
-                    "#### This is a sheet — built in two stages\n"
-                    "**Concept (mashup):** explore freely using your reference images as "
-                    "inspiration, then lock the one design that's *the* character or backdrop.\n\n"
-                    "**Sheet panel:** once a concept is locked, build each pose/expression/"
-                    "variant of the fixed template — every panel should stay tight to the "
-                    "locked concept's design, not reinterpret it."
-                )
+            gr.Markdown("#### Step 1 — Character identity and visual references")
+            with gr.Group(elem_classes=["character-manager"]) as character_manager:
+                gr.Markdown("**Your character trigger is permanent production identity.** Use the same `CHAR:name` trigger in prompts, records, and future LoRA work.")
+                character_select = gr.Dropdown(label="Existing character trigger", choices=character_choices(), value=None,
+                                               info="Choose a locked identity, or create one below.")
                 with gr.Row():
-                    build_stage = gr.Radio(label="Stage", choices=[CONCEPT_STAGE, PANEL_STAGE],
-                                            value=CONCEPT_STAGE, scale=2)
-                    concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1,
-                                              height=120)
-                panel_key = gr.Dropdown(label="Which panel are you building?",
-                                        choices=[panel["key"] for panel in composer.get_template("CHAR")],
-                                        value="fullbody_front", visible=False)
+                    new_trigger = gr.Textbox(label="New trigger", placeholder="e.g. CHAR:alistair_pig")
+                    new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Alistair the Pig")
+                new_working_note = gr.Textbox(label="Working continuity note", lines=2,
+                                               placeholder="e.g. practical country gentleman; tweed cap, waistcoat, calm and capable")
+                create_character_btn = gr.Button("Create and lock character identity", variant="primary")
+                character_status = gr.Markdown("")
+                with gr.Row():
+                    character_display_name = gr.Textbox(label="Selected display name")
+                    character_working_note = gr.Textbox(label="Selected continuity note", lines=2)
+                with gr.Row():
+                    save_character_btn = gr.Button("Save character details")
+                    rename_trigger = gr.Textbox(label="Rename trigger", placeholder="e.g. CHAR:alistair_pig")
+                    rename_character_btn = gr.Button("Rename trigger")
+                delete_confirmation = gr.Checkbox(label="I understand deletion removes this character's registry records, concepts, panels, and references. Image files are kept.")
+                delete_character_btn = gr.Button("Delete character records", variant="stop")
+            entry_id = gr.Textbox(visible=False)
+            with gr.Group(visible=False) as generic_identity_group:
+                generic_entry_id = gr.Textbox(label="Name", placeholder="e.g. MASTER:farm_field or 1.1")
+                generic_entry_id.change(lambda value: value, inputs=generic_entry_id, outputs=entry_id)
+                gr.Markdown("Use a stable ID: `MASTER:name`, `PROP:name`, or a shot number such as `1.1`.")
+            entry_type = gr.Dropdown(label="What are you building?", choices=["CHAR", "MASTER", "PROP", "SHOT"], value="CHAR",
+                                     info="Character is the default. Switching type changes the workflow and guidance above.")
+            with gr.Row():
+                beat = gr.Textbox(label="Section / beat (optional)", placeholder="e.g. The Storm, or Beat 3")
+                reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHAR:alistair_pig, or MASTER:ship_deck")
+            description = gr.Textbox(label="Working description (optional)", lines=2,
+                                      placeholder="For your own reference only, e.g. Alistair facing camera in his everyday tweed")
+            with gr.Group(visible=True) as panel_group:
+                gr.HTML('<div class="stage-guide"><strong>Choose a stage.</strong> Start with <strong>Concept (mashup)</strong>: use your references and prompts to lock the canonical design. Use <strong>Sheet panel</strong> only after that, to make consistent turnarounds, expressions, and details from the locked concept.</div>')
+                with gr.Row():
+                    build_stage = gr.Radio(label="Build stage", choices=[CONCEPT_STAGE, PANEL_STAGE], value=CONCEPT_STAGE, scale=2)
+                    concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1, height=120)
+                panel_key = gr.Dropdown(label="Sheet panel", choices=[panel["key"] for panel in composer.get_template("CHAR")], value="fullbody_front", visible=False)
                 panel_status = gr.Markdown("")
-
-                with gr.Accordion("📎 Reference images (mood board, optional)", open=False):
-                    gr.Markdown(
-                        "Attach downloaded/inspiration images here before you've "
-                        "settled on a design. These are for your own reference — they "
-                        "don't get used as generation input directly."
-                    )
+                with gr.Accordion("Reference images — add a mood board", open=True):
+                    gr.Markdown("Upload visual references before creating the concept. They are retained with the character record for continuity; this version does not send them into the generator automatically.")
                     with gr.Row():
-                        ref_file = gr.File(label="Image to attach", file_types=["image"])
-                        ref_note = gr.Textbox(label="What to borrow from it", scale=2,
-                                               placeholder="e.g. 'like this jacket silhouette'")
+                        ref_file = gr.File(label="Upload a reference image", file_types=["image"])
+                        ref_note = gr.Textbox(label="What should this reference contribute?", placeholder="e.g. jacket silhouette, color palette, attitude")
                     ref_add_btn = gr.Button("Add reference")
                     ref_status = gr.Markdown("")
-                    ref_gallery = gr.Gallery(label="Attached references", columns=4, height=200)
-                    ref_add_btn.click(add_reference_ui, inputs=[entry_id, ref_file, ref_note],
-                                       outputs=[ref_status, ref_gallery])
+                    ref_gallery = gr.Gallery(label="Character reference board", columns=4, height=200)
 
         with gr.Group(elem_classes=["step-card", "step-2"]):
-            gr.Markdown("#### Step 2 — Describe what you want to see")
-            prompt_positive = gr.Textbox(
-                label="Describe the image", lines=3,
-                placeholder="e.g. a dignified pig wearing a tweed cap and waistcoat, hand-painted illustration style",
-            )
-            prompt_negative = gr.Textbox(
-                label="Things to avoid (optional)", lines=2,
-                placeholder="e.g. no watercolor, no extra limbs",
-            )
+            gr.Markdown("#### Step 2 — Prompt the image or video model")
+            prompt_positive = gr.Textbox(label="Positive prompt", lines=3,
+                placeholder="Describe subject, wardrobe, pose, composition, style, lighting, and continuity.")
+            prompt_negative = gr.Textbox(label="Negative prompt (optional)", lines=2,
+                placeholder="Describe failures to avoid: anatomy errors, unwanted style, wrong wardrobe, text, etc.")
+            with gr.Accordion("Draft prompt brief — copy into your preferred AI assistant", open=False):
+                gr.Markdown("No API call is made. This formats your current character and prompt information into a model-aware brief for you to paste into the AI model of your choice.")
+                target_model = gr.Dropdown(label="Intended generation target", choices=["ComfyUI image workflow", "Wan image-to-video", "LTX-Video", "Flux", "Generic image/video model"], value="ComfyUI image workflow")
+                draft_prompt_btn = gr.Button("Draft copyable prompt brief")
+                prompt_brief = gr.Textbox(label="Copy this into your preferred AI assistant", lines=14, interactive=False)
 
         with gr.Group(elem_classes=["step-card", "step-3"]):
             gr.Markdown("#### Step 3 — Generate some options")
@@ -960,7 +1030,26 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
         # --- Wiring for entry_type / stage / panel context awareness ---
         entry_type.change(on_entry_type_change, inputs=entry_type,
-                           outputs=[panel_group, panel_key, composite_group, build_stage, build_context_banner])
+                           outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner])
+        character_select.change(select_character_ui, inputs=character_select,
+                                outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
+            refresh_references, inputs=entry_id, outputs=ref_gallery).then(
+            concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+        create_character_btn.click(create_character_ui, inputs=[new_trigger, new_display_name, new_working_note],
+                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                            new_trigger, new_display_name, new_working_note, character_status])
+        save_character_btn.click(save_character_ui, inputs=[entry_id, character_display_name, character_working_note],
+                                 outputs=[character_select, character_status])
+        rename_character_btn.click(rename_character_ui, inputs=[entry_id, rename_trigger],
+                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                            rename_trigger, character_status])
+        delete_character_btn.click(delete_character_ui, inputs=[entry_id, delete_confirmation],
+                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                            character_status])
+        ref_add_btn.click(add_reference_ui, inputs=[entry_id, ref_file, ref_note], outputs=[ref_status, ref_gallery])
+        draft_prompt_btn.click(draft_prompt_brief,
+                               inputs=[target_model, entry_id, character_display_name, character_working_note, prompt_positive, prompt_negative],
+                               outputs=prompt_brief)
         build_stage.change(on_build_stage_change, inputs=build_stage, outputs=panel_key)
         entry_id.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
                          outputs=[prompt_positive, prompt_negative, panel_status])
