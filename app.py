@@ -669,7 +669,31 @@ body, .gradio-container {
     padding: 12px 14px;
 }
 .stage-guide strong { color: var(--horizon-navy); }
-.character-manager { background: #FFF9EA !important; border: 1px solid var(--weathered-blue-gray) !important; border-radius: 10px; padding: 12px !important; }
+.character-manager {
+    background: #FFF9EA !important;
+    border: 1px solid var(--weathered-blue-gray) !important;
+    border-radius: 10px;
+    padding: 14px 16px !important;
+}
+.character-manager .block, .character-manager .form, .character-manager .wrap,
+.character-manager .gr-box, .character-manager .gr-group, .character-manager fieldset {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+}
+.character-manager p, .character-manager strong, .character-manager span {
+    color: var(--horizon-navy) !important;
+}
+.character-manager > .prose {
+    margin: 0 0 10px !important;
+}
+.character-manager label {
+    background: var(--horizon-orange) !important;
+    color: #FFFFFF !important;
+}
+.character-manager .wrap { margin-top: 0 !important; }
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
