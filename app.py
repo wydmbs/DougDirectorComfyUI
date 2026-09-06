@@ -431,7 +431,7 @@ def _toggle_help(is_visible):
 
 THEME = gr.themes.Soft(
     primary_hue="orange",
-    secondary_hue="yellow",
+    secondary_hue="slate",
     neutral_hue="slate",
     radius_size="lg",
 ).set(
@@ -444,7 +444,7 @@ THEME = gr.themes.Soft(
     input_border_color="#61717B",
     input_border_color_focus="#E99322",
     button_primary_background_fill="#E99322",
-    button_primary_background_fill_hover="#C96D16",
+    button_primary_background_fill_hover="#9C4300",
     button_primary_text_color="#172534",
     button_primary_text_color_hover="#F5F1E8",
     button_secondary_background_fill="#F5F1E8",
@@ -458,12 +458,12 @@ CUSTOM_CSS = """
 :root {
     --horizon-navy: #172534;
     --storm-slate: #273746;
-    --weathered-blue-gray: #61717B;
+    --weathered-blue-gray: #5C6C77;
     --sea-mist: #DCE2DF;
     --cloud-linen: #F5F1E8;
     --sunlit-sand: #E9D2AB;
     --signal-amber: #E99322;
-    --horizon-orange: #C96D16;
+    --horizon-orange: #9C4300;
     --sunbeam-gold: #F6BE45;
     --ember: #B8462C;
     --sea-glass: #3E7B68;
@@ -542,7 +542,7 @@ input[type="text"], input[type="number"], textarea {
     border-color: #9CACB8 !important;
 }
 input::placeholder, textarea::placeholder {
-    color: #E1E8E7 !important;
+    color: #F5F1E8 !important;
     opacity: 1 !important;
 }
 .block, .form, .wrap, .gr-box, .gr-group {
@@ -595,11 +595,11 @@ FLOW_SVG = """
 <svg viewBox="0 0 900 170" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:820px;font-family:sans-serif;">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#61717B"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="#5C6C77"/>
     </marker>
   </defs>
   <g font-size="14" text-anchor="middle">
-    <rect x="10" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#61717B" stroke-width="1.5"/>
+    <rect x="10" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#5C6C77" stroke-width="1.5"/>
     <text x="85" y="80" font-weight="bold">1. Name it</text>
     <text x="85" y="100" font-size="12" fill="#172534">CHAR:pig, 1.1, etc.</text>
 
@@ -620,13 +620,13 @@ FLOW_SVG = """
     <text x="805" y="100" font-size="12" fill="#172534">saved + noted, for good</text>
   </g>
 
-  <line x1="160" y1="85" x2="188" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="340" y1="85" x2="368" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="520" y1="85" x2="548" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="700" y1="85" x2="728" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="160" y1="85" x2="188" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="340" y1="85" x2="368" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="85" x2="548" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="700" y1="85" x2="728" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
 
   <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#B8C1BE" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#61717B">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
+  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#5C6C77">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
 </svg>
 """
 
