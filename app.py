@@ -505,7 +505,30 @@ body, .gradio-container {
 .step-4 { border-left-color: var(--sunbeam-gold); }
 .step-5 { border-left-color: var(--sea-glass); }
 .step-6 { border-left-color: var(--horizon-orange); }
-.step-card h4 { margin-top: 0 !important; color: var(--horizon-navy); }
+.step-card, .step-card .block, .step-card .form, .step-card .wrap,
+.step-card .gr-box, .step-card .gr-group, .step-card fieldset {
+    background: var(--cloud-linen) !important;
+    color: var(--horizon-navy) !important;
+}
+.step-card h1, .step-card h2, .step-card h3, .step-card h4,
+.step-card p, .step-card span, .step-card label, .step-card legend {
+    color: var(--horizon-navy) !important;
+}
+.step-card h4 { margin-top: 0 !important; }
+.step-card label {
+    background: var(--horizon-orange);
+    color: #FFFFFF !important;
+    border-radius: 8px;
+    padding: 3px 7px;
+    font-weight: 600;
+}
+.step-card input, .step-card textarea, .step-card select {
+    background: #5A6C80 !important;
+    color: #FFFFFF !important;
+}
+.step-card input::placeholder, .step-card textarea::placeholder {
+    color: #F5F1E8 !important;
+}
 .help-btn { max-width: 40px !important; }
 .help-panel {
     background: #FFF9EA;
