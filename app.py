@@ -169,7 +169,7 @@ def generate_click(entry_id, entry_type, build_stage, panel_key, prompt_positive
     return _generate(label, prompt_positive, prompt_negative, base_seed, n_variants)
 
 
-def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, prompt_positive,
+def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, reused_from, prompt_positive,
                 prompt_negative, winner_path, winner_seed, note):
     if not entry_id:
         return "⚠️ Give this a name first (Step 1)."
@@ -187,7 +187,7 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
             prompt_negative_add=prompt_negative.strip(),
             model="mock" if CFG.mock_mode else os.path.basename(CFG.workflow_json_path or ""),
             seed=winner_seed,
-            reused_from="",
+            reused_from=reused_from.strip(),
             image_path=winner_path,
             note=note.strip(),
         )
@@ -206,7 +206,7 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
             prompt_negative_add=prompt_negative.strip(),
             model="mock" if CFG.mock_mode else os.path.basename(CFG.workflow_json_path or ""),
             seed=winner_seed,
-            reused_from="",
+            reused_from=reused_from.strip(),
             image_path=winner_path,
             note=note.strip(),
         )
@@ -379,8 +379,9 @@ def save_composite_ui(entry_id, entry_type, composite_path, sheet_note):
 def registry_refresh():
     rows = store.list_entries(CFG.storyboard_path)
     return [
-        [r.get("entry_id"), r.get("entry_type"), r.get("beat"), r.get("description"),
-         r.get("model"), r.get("seed"), r.get("locked"), r.get("template"), r.get("image_path")]
+        [r.get("entry_id"), r.get("entry_type"), r.get("beat"), r.get("reused_from"),
+         r.get("description"), r.get("model"), r.get("seed"), r.get("locked"),
+         r.get("template"), r.get("composite_image_path") or r.get("image_path")]
         for r in rows
     ]
 
@@ -429,34 +430,86 @@ def _toggle_help(is_visible):
 # ---------------------------------------------------------------------------
 
 THEME = gr.themes.Soft(
-    primary_hue="teal",
-    secondary_hue="amber",
+    primary_hue="orange",
+    secondary_hue="yellow",
     neutral_hue="slate",
     radius_size="lg",
 ).set(
-    button_primary_background_fill="*primary_500",
-    button_primary_background_fill_hover="*primary_600",
+    body_background_fill="#DCE2DF",
+    body_text_color="#172534",
+    block_background_fill="#F5F1E8",
+    block_border_color="#B8C1BE",
+    block_label_text_color="#172534",
+    input_background_fill="#F5F1E8",
+    input_border_color="#61717B",
+    input_border_color_focus="#E99322",
+    button_primary_background_fill="#E99322",
+    button_primary_background_fill_hover="#C96D16",
+    button_primary_text_color="#172534",
+    button_primary_text_color_hover="#F5F1E8",
+    button_secondary_background_fill="#F5F1E8",
+    button_secondary_background_fill_hover="#E9D2AB",
+    button_secondary_border_color="#61717B",
+    button_secondary_text_color="#172534",
     block_title_text_weight="600",
 )
 
 CUSTOM_CSS = """
+:root {
+    --horizon-navy: #172534;
+    --storm-slate: #273746;
+    --weathered-blue-gray: #61717B;
+    --sea-mist: #DCE2DF;
+    --cloud-linen: #F5F1E8;
+    --sunlit-sand: #E9D2AB;
+    --signal-amber: #E99322;
+    --horizon-orange: #C96D16;
+    --sunbeam-gold: #F6BE45;
+    --ember: #B8462C;
+    --sea-glass: #3E7B68;
+    --pale-gold: #FFE09A;
+}
+
+body, .gradio-container {
+    background: var(--sea-mist) !important;
+    color: var(--horizon-navy);
+}
+.gradio-container { max-width: 1440px !important; }
+.tabs {
+    background: var(--storm-slate);
+    border-radius: 16px;
+    padding: 6px;
+    margin-bottom: 18px;
+}
+.tabs button {
+    color: var(--cloud-linen) !important;
+    border-radius: 10px !important;
+}
+.tabs button.selected {
+    background: var(--cloud-linen) !important;
+    color: var(--horizon-navy) !important;
+    box-shadow: inset 0 -4px 0 var(--sunbeam-gold);
+}
 .step-card {
+    background: var(--cloud-linen);
+    border: 1px solid #B8C1BE;
     border-radius: 14px;
     padding: 16px 20px;
     margin-bottom: 14px;
-    border-left: 5px solid var(--card-accent, #14b8a6);
+    border-left: 5px solid var(--weathered-blue-gray);
+    box-shadow: 0 4px 12px rgb(23 37 52 / 8%);
 }
-.step-1 { background: #ecfdf5; border-left-color: #14b8a6; }
-.step-2 { background: #eff6ff; border-left-color: #3b82f6; }
-.step-3 { background: #fefce8; border-left-color: #eab308; }
-.step-4 { background: #fdf4ff; border-left-color: #c026d3; }
-.step-5 { background: #f0fdf4; border-left-color: #22c55e; }
-.step-6 { background: #fff1f2; border-left-color: #e11d48; }
-.step-card h4 { margin-top: 0 !important; }
+.step-1 { border-left-color: var(--weathered-blue-gray); }
+.step-2 { border-left-color: #B9824A; }
+.step-3 { border-left-color: var(--signal-amber); }
+.step-4 { border-left-color: var(--sunbeam-gold); }
+.step-5 { border-left-color: var(--sea-glass); }
+.step-6 { border-left-color: var(--horizon-orange); }
+.step-card h4 { margin-top: 0 !important; color: var(--horizon-navy); }
 .help-btn { max-width: 40px !important; }
 .help-panel {
-    background: #f8fafc;
-    border: 1px dashed #cbd5e1;
+    background: #FFF9EA;
+    border: 1px dashed var(--signal-amber);
     border-radius: 10px;
     padding: 8px 14px !important;
     margin-top: -6px;
@@ -464,12 +517,42 @@ CUSTOM_CSS = """
     font-size: 0.92em;
 }
 #welcome-hero {
-    background: linear-gradient(135deg, #ecfeff 0%, #fef9c3 100%);
+    background: linear-gradient(135deg, var(--storm-slate) 0%, var(--horizon-navy) 52%, #6C543F 100%);
+    color: var(--cloud-linen);
     border-radius: 16px;
     padding: 24px 28px;
+    box-shadow: 0 8px 20px rgb(23 37 52 / 18%);
+}
+#welcome-hero h1, #welcome-hero h2, #welcome-hero h3,
+#welcome-hero p, #welcome-hero li, #welcome-hero strong { color: var(--cloud-linen) !important; }
+button.primary {
+    background: var(--signal-amber) !important;
+    color: var(--horizon-navy) !important;
+    border-color: var(--signal-amber) !important;
+}
+button.primary:hover {
+    background: var(--horizon-orange) !important;
+    color: var(--cloud-linen) !important;
+    border-color: var(--horizon-orange) !important;
+}
+input, textarea, select,
+input[type="text"], input[type="number"], textarea {
+    background: #5A6C80 !important;
+    color: #FFFFFF !important;
+    border-color: #9CACB8 !important;
+}
+input::placeholder, textarea::placeholder {
+    color: #E1E8E7 !important;
+    opacity: 1 !important;
+}
+.block, .form, .wrap, .gr-box, .gr-group {
+    border-color: #9CACB8;
+}
+input:focus, textarea:focus, select:focus, button:focus-visible {
+    outline: 3px solid var(--pale-gold) !important;
+    outline-offset: 2px;
 }
 """
-
 
 # ---------------------------------------------------------------------------
 # Welcome tab content
@@ -512,38 +595,38 @@ FLOW_SVG = """
 <svg viewBox="0 0 900 170" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:820px;font-family:sans-serif;">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#888"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="#61717B"/>
     </marker>
   </defs>
   <g font-size="14" text-anchor="middle">
-    <rect x="10" y="50" width="150" height="70" rx="10" fill="#ecfdf5" stroke="#14b8a6" stroke-width="1.5"/>
+    <rect x="10" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#61717B" stroke-width="1.5"/>
     <text x="85" y="80" font-weight="bold">1. Name it</text>
-    <text x="85" y="100" font-size="12" fill="#555">CHAR:pig, 1.1, etc.</text>
+    <text x="85" y="100" font-size="12" fill="#172534">CHAR:pig, 1.1, etc.</text>
 
-    <rect x="190" y="50" width="150" height="70" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+    <rect x="190" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#B9824A" stroke-width="1.5"/>
     <text x="265" y="80" font-weight="bold">2. Describe it</text>
-    <text x="265" y="100" font-size="12" fill="#555">prompt + what to avoid</text>
+    <text x="265" y="100" font-size="12" fill="#172534">prompt + what to avoid</text>
 
-    <rect x="370" y="50" width="150" height="70" rx="10" fill="#fefce8" stroke="#eab308" stroke-width="1.5"/>
+    <rect x="370" y="50" width="150" height="70" rx="10" fill="#FFF4D6" stroke="#E99322" stroke-width="1.5"/>
     <text x="445" y="80" font-weight="bold">3. Generate</text>
-    <text x="445" y="100" font-size="12" fill="#555">a few options at once</text>
+    <text x="445" y="100" font-size="12" fill="#172534">a few options at once</text>
 
-    <rect x="550" y="50" width="150" height="70" rx="10" fill="#fdf4ff" stroke="#c026d3" stroke-width="1.5"/>
+    <rect x="550" y="50" width="150" height="70" rx="10" fill="#FFF9EA" stroke="#F6BE45" stroke-width="1.5"/>
     <text x="625" y="80" font-weight="bold">4. Pick a winner</text>
-    <text x="625" y="100" font-size="12" fill="#555">the one that looks right</text>
+    <text x="625" y="100" font-size="12" fill="#172534">the one that looks right</text>
 
-    <rect x="730" y="50" width="150" height="70" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+    <rect x="730" y="50" width="150" height="70" rx="10" fill="#F2F7F2" stroke="#3E7B68" stroke-width="1.5"/>
     <text x="805" y="80" font-weight="bold">5. Lock it</text>
-    <text x="805" y="100" font-size="12" fill="#555">saved + noted, for good</text>
+    <text x="805" y="100" font-size="12" fill="#172534">saved + noted, for good</text>
   </g>
 
-  <line x1="160" y1="85" x2="188" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="340" y1="85" x2="368" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="520" y1="85" x2="548" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="700" y1="85" x2="728" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="160" y1="85" x2="188" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="340" y1="85" x2="368" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="85" x2="548" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="700" y1="85" x2="728" y2="85" stroke="#61717B" stroke-width="2" marker-end="url(#arrow)"/>
 
-  <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#bbb" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#888">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
+  <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#B8C1BE" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#61717B">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
 </svg>
 """
 
@@ -680,7 +763,13 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             id_state = gr.State(False)
             id_btn.click(_toggle_help, inputs=id_state, outputs=[id_state, id_help])
 
-            beat = gr.Textbox(label="Section / beat (optional)")
+            with gr.Row():
+                beat = gr.Textbox(label="Section / beat (optional)")
+                reused_from = gr.Textbox(
+                    label="Chained from (optional)",
+                    placeholder="e.g. 1.1",
+                    info="The prior shot or asset whose locked end/design this continues.",
+                )
             description = gr.Textbox(label="Short description (for your own reference)", lines=2,
                                       placeholder="e.g. 'the pig, front-facing, tweed cap'")
 
@@ -764,7 +853,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             lock_status = gr.Markdown("")
             lock_btn.click(
                 lock_click,
-                inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, prompt_positive,
+                inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, reused_from, prompt_positive,
                         prompt_negative, winner_path, winner_seed, note],
                 outputs=lock_status,
             ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
@@ -808,11 +897,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         gr.Markdown(
             "Everything you've locked so far. Locking a new version of "
             "something you've already named updates that entry and adds "
-            "your new note underneath the old one — it won't duplicate."
+            "your new note underneath the old one — it won't duplicate. The "
+            "Chained from column records continuity with an earlier locked shot or asset."
         )
         refresh_btn = gr.Button("Refresh")
         registry_table = gr.Dataframe(
-            headers=["Name", "Type", "Section", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
+            headers=["Name", "Type", "Section", "Chained from", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
             interactive=False,
         )
         refresh_btn.click(registry_refresh, outputs=registry_table)
