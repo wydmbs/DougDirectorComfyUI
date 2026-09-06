@@ -1244,7 +1244,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     harry_extract_btn = gr.Button("Load attached text")
                 with gr.Group(elem_classes=["harry-source-option"]):
                     gr.Markdown("**Option B — Paste text**\n\nPaste a script, story, poem, narration, or treatment directly.")
-                    harry_source = gr.Textbox(label="Written source text", lines=12, placeholder="Paste your script, story, poem, or narration here…")
+                    harry_source = gr.Textbox(label="Written source text", lines=14, placeholder="Paste your script, story, poem, or narration here…")
                 with gr.Group(elem_classes=["harry-source-option"]):
                     gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before asking Harry.")
                     harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
