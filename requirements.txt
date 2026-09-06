@@ -7,3 +7,5 @@ PyYAML>=6.0
 # align_narration.py, which is meant to run on TheBeast (needs real
 # internet access + disk space for the model), not in this app's
 # environment. Install it separately there: pip install openai-whisper
+pypdf>=5.0
+python-docx>=1.1

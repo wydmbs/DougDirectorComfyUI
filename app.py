@@ -116,6 +116,13 @@ def harry_save_source(title, source_text, audio_file):
         return "", f"⚠️ {error}"
 
 
+def harry_extract_text(text_file):
+    try:
+        return harry.extract_text_document(text_file.name if text_file else None), "Document text loaded. Review or edit it before asking Harry."
+    except harry.HarryError as error:
+        return gr.update(), f"⚠️ {error}"
+
+
 def harry_transcribe(audio_file):
     try:
         return harry.transcribe_audio(audio_file.name if audio_file else None), "Transcription complete. Review it, then ask Harry for recommendations."
@@ -1229,13 +1236,17 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         gr.Markdown("## Harry the Advisor\nStart with the script, story, poem, or narration. Harry proposes the production prep list; you edit and approve it before it becomes Build presets.")
         with gr.Group(elem_classes=["step-card", "step-1"]):
             harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
-            gr.HTML('<div class="harry-intake"><strong>Choose your source:</strong> either <strong>Option A — paste the written script/text</strong>, or <strong>Option B — upload narration audio</strong> and transcribe it locally. You may provide both if the text needs checking against the audio.</div>')
+            gr.HTML('<div class="harry-intake"><strong>Choose one source route:</strong> <strong>Option A — attach a text document</strong>, <strong>Option B — paste text</strong>, or <strong>Option C — attach narration audio</strong> and transcribe it locally. You may combine them when useful.</div>')
             with gr.Row():
                 with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option A — Paste text**\n\nPaste a script, story, poem, narration, or treatment. This is the fastest route.")
+                    gr.Markdown("**Option A — Attach text**\n\nAttach a `.txt`, `.md`, `.docx`, or `.pdf` script, story, poem, or treatment. Load it into the text area to review before Harry sees it.")
+                    harry_text_file = gr.File(label="Text document", file_types=[".txt", ".md", ".docx", ".pdf"])
+                    harry_extract_btn = gr.Button("Load attached text")
+                with gr.Group(elem_classes=["harry-source-option"]):
+                    gr.Markdown("**Option B — Paste text**\n\nPaste a script, story, poem, narration, or treatment directly.")
                     harry_source = gr.Textbox(label="Written source text", lines=12, placeholder="Paste your script, story, poem, or narration here…")
                 with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option B — Upload audio**\n\nUpload narration when no written text is available, then use Transcribe audio locally. Review the transcription before asking Harry.")
+                    gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before asking Harry.")
                     harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
                     harry_transcribe_btn = gr.Button("Transcribe audio locally")
             harry_save_btn = gr.Button("Save current source to project library")
@@ -1257,6 +1268,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                                       datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
             harry_apply_btn = gr.Button("Apply approved drafts to Build", variant="primary")
             harry_apply_status = gr.Markdown("")
+        harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
         harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
         harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
         harry_run_btn.click(harry_analyze, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio],

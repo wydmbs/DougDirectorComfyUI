@@ -174,6 +174,28 @@ def save_source(title, text, uploaded_path=None):
     return metadata
 
 
+def extract_text_document(file_path):
+    if not file_path:
+        raise HarryError("Attach a .txt, .md, .docx, or .pdf document first.")
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+    if suffix in {".txt", ".md", ".rtf"}:
+        return path.read_text(encoding="utf-8", errors="replace")
+    if suffix == ".docx":
+        try:
+            from docx import Document
+        except ImportError as error:
+            raise HarryError("Reading .docx needs python-docx. Install it with: pip install python-docx") from error
+        return "\n".join(paragraph.text for paragraph in Document(path).paragraphs).strip()
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError as error:
+            raise HarryError("Reading PDFs needs pypdf. Install it with: pip install pypdf") from error
+        return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages).strip()
+    raise HarryError("Supported text documents are .txt, .md, .docx, and .pdf.")
+
+
 def transcribe_audio(audio_path):
     if not audio_path:
         raise HarryError("Upload audio before asking for transcription.")
