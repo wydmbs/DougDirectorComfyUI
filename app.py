@@ -2,16 +2,18 @@
 app.py — ComfyUI Director Harness, Module 1: Image Build UI.
 
 One shell, tabs for capability (see SUITE.md):
+  Welcome  — plain-language explanation of what this tool does and how the
+             four tabs fit together. Read this first.
   Setup    — point at a ComfyUI instance + a workflow exported via
-             "Save (API Format)", map which node holds positive/negative
-             prompt and seed. One-time, works with any workflow.
+             "Save (API Format)", map which node holds the positive prompt,
+             negative prompt, and seed. One-time, works with any workflow.
   Build    — pick an entry_id (a shot like "1.1" or an asset like
              "CHAR:pig" / "MASTER:farm_field"), iterate the prompt,
              generate N variants, pick a winner, lock it into the registry.
   Registry — read-only view of everything locked so far.
 
 Mock mode (default ON) generates placeholder images instead of calling
-ComfyUI, so the full loop can be tested without a live GPU.
+ComfyUI, so the full loop can be tried with zero setup and no GPU.
 """
 
 import io
@@ -20,7 +22,7 @@ import os
 import random
 
 import gradio as gr
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 import config as cfgmod
 import storyboard_store as store
@@ -80,7 +82,13 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         mock_mode=bool(mock_mode),
     )
     cfgmod.save_config(CFG)
-    return f"Saved. Mock mode is {'ON' if CFG.mock_mode else 'OFF'}."
+    mode_msg = (
+        "✅ Saved. Mock mode is ON — go to the Build tab, nothing here calls ComfyUI yet."
+        if CFG.mock_mode else
+        "✅ Saved. Mock mode is OFF — Build will now send real requests to ComfyUI at "
+        f"{CFG.comfyui_url}."
+    )
+    return mode_msg
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +97,7 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
 
 def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_variants):
     if not entry_id:
-        return [], "Enter an entry_id first (e.g. 1.1, CHAR:pig, MASTER:farm_field)."
+        return [], "⚠️ Give this a name first (Step 1) — try 'CHAR:pig' or '1.1'."
 
     base_seed = int(base_seed) if base_seed not in (None, "") else random.randint(0, 2**31 - 1)
     n_variants = max(1, min(int(n_variants), 8))
@@ -100,7 +108,7 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
     workflow = None
     if not CFG.mock_mode:
         if not CFG.workflow_json_path or not os.path.exists(CFG.workflow_json_path):
-            return [], "No workflow JSON configured — set one in the Setup tab, or turn mock mode on."
+            return [], "⚠️ No workflow file is set up yet. Go to Setup and either upload one or turn Mock Mode back on."
         with open(CFG.workflow_json_path, "r", encoding="utf-8") as f:
             workflow = json.load(f)
         client = ComfyClient(CFG.comfyui_url)
@@ -129,7 +137,10 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
         except ComfyClientError as e:
             status_lines.append(f"seed {seed}: {e}")
 
-    status = f"Generated {len(gallery)}/{n_variants} variant(s)." if gallery else "No images generated."
+    if gallery:
+        status = f"✅ Generated {len(gallery)}/{n_variants}. Scroll down: pick your favorite for Step 4."
+    else:
+        status = "⚠️ Nothing came back."
     if status_lines:
         status += " " + " | ".join(status_lines)
     return gallery, status
@@ -138,9 +149,9 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
 def build_lock(entry_id, entry_type, beat, description, prompt_positive,
                 prompt_negative, winner_path, winner_seed, note):
     if not entry_id:
-        return "Enter an entry_id first."
+        return "⚠️ Give this a name first (Step 1)."
     if not winner_path:
-        return "Generate variants and pick a winner path first."
+        return "⚠️ Generate some variants (Step 3) and tell me which one won (Step 4) before locking."
 
     store.lock_entry(
         path=CFG.storyboard_path,
@@ -156,7 +167,7 @@ def build_lock(entry_id, entry_type, beat, description, prompt_positive,
         image_path=winner_path,
         note=note.strip(),
     )
-    return f"Locked {entry_id} (seed {winner_seed})."
+    return f"🔒 Locked '{entry_id}' with seed {winner_seed}. Check the Registry tab to see it."
 
 
 # ---------------------------------------------------------------------------
@@ -174,65 +185,227 @@ def registry_refresh():
 
 
 # ---------------------------------------------------------------------------
+# Welcome tab content
+# ---------------------------------------------------------------------------
+
+WELCOME_MARKDOWN = """
+# Welcome — what this tool is for
+
+If you're generating character art, backdrops, or shot images with an AI
+image model, you'll usually make several versions before one actually looks
+right — and once it does, you want to **remember exactly how you made it**
+so you (or a teammate) can reuse or reproduce it later.
+
+This tool is that memory. It walks you through: **generate a batch of
+options → pick your favorite → lock it in with a note about why** — and it
+keeps a running, searchable record of every locked image so nothing gets
+lost in a folder of "final_v3_REAL_final.png" files.
+
+### The three tabs, in the order you'll actually use them
+
+1. **Setup** — tell the tool where your image generator lives. You only do
+   this once. *(Not sure yet? Skip it — Mock Mode is on by default and lets
+   you try the whole flow with fake placeholder images first.)*
+2. **Build** — your day-to-day workspace. Name what you're making, describe
+   it, generate a few versions, pick your favorite, lock it in.
+3. **Registry** — a read-only list of everything you've locked so far, like
+   a photo album with notes attached to each picture.
+
+### The flow, visually
+"""
+
+FLOW_SVG = """
+<svg viewBox="0 0 900 170" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:820px;font-family:sans-serif;">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#888"/>
+    </marker>
+  </defs>
+  <!-- Step boxes -->
+  <g font-size="14" text-anchor="middle">
+    <rect x="10" y="50" width="150" height="70" rx="10" fill="#eef4ff" stroke="#5b8def" stroke-width="1.5"/>
+    <text x="85" y="80" font-weight="bold">1. Name it</text>
+    <text x="85" y="100" font-size="12" fill="#555">CHAR:pig, 1.1, etc.</text>
+
+    <rect x="190" y="50" width="150" height="70" rx="10" fill="#eef4ff" stroke="#5b8def" stroke-width="1.5"/>
+    <text x="265" y="80" font-weight="bold">2. Describe it</text>
+    <text x="265" y="100" font-size="12" fill="#555">prompt + what to avoid</text>
+
+    <rect x="370" y="50" width="150" height="70" rx="10" fill="#eef4ff" stroke="#5b8def" stroke-width="1.5"/>
+    <text x="445" y="80" font-weight="bold">3. Generate</text>
+    <text x="445" y="100" font-size="12" fill="#555">a few options at once</text>
+
+    <rect x="550" y="50" width="150" height="70" rx="10" fill="#eef4ff" stroke="#5b8def" stroke-width="1.5"/>
+    <text x="625" y="80" font-weight="bold">4. Pick a winner</text>
+    <text x="625" y="100" font-size="12" fill="#555">the one that looks right</text>
+
+    <rect x="730" y="50" width="150" height="70" rx="10" fill="#e9f9ee" stroke="#3fae5c" stroke-width="1.5"/>
+    <text x="805" y="80" font-weight="bold">5. Lock it</text>
+    <text x="805" y="100" font-size="12" fill="#555">saved + noted, for good</text>
+  </g>
+
+  <!-- Arrows -->
+  <line x1="160" y1="85" x2="188" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="340" y1="85" x2="368" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="85" x2="548" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="700" y1="85" x2="728" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Loop back label -->
+  <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#bbb" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#888">not happy? tweak the description and generate again — nothing is locked until Step 5</text>
+</svg>
+"""
+
+WELCOME_MARKDOWN_2 = """
+Once something is locked, it shows up permanently in the **Registry** tab —
+that's your project's single source of truth going forward.
+
+**Ready?** Click the **Build** tab above and try it — Mock Mode is on, so
+this costs nothing and can't break anything. Come back to **Setup** only
+once you're ready to connect a real image generator.
+"""
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
 with gr.Blocks(title="ComfyUI Director Harness") as demo:
-    gr.Markdown("# ComfyUI Director Harness — Module 1: Image Build")
+    gr.Markdown("# ComfyUI Director Harness")
 
-    with gr.Tab("Setup"):
+    with gr.Tab("👋 Welcome"):
+        gr.Markdown(WELCOME_MARKDOWN)
+        gr.HTML(FLOW_SVG)
+        gr.Markdown(WELCOME_MARKDOWN_2)
+
+    with gr.Tab("⚙️ Setup"):
         gr.Markdown(
-            "Point this at a ComfyUI instance and a workflow exported via "
-            "**Save (API Format)**. Map which node IDs hold the positive prompt, "
-            "negative prompt, and seed. Leave mock mode on to test the loop "
-            "without a live ComfyUI/GPU."
+            "### One-time setup\n"
+            "You only need this if you're connecting a real image generator "
+            "(ComfyUI). **If you just want to try the tool out, skip straight "
+            "to the Build tab** — Mock Mode below is on by default and fakes "
+            "everything safely."
         )
-        comfyui_url = gr.Textbox(label="ComfyUI URL", value=CFG.comfyui_url)
-        workflow_file = gr.File(label="Workflow JSON (API format)", file_types=[".json"])
-        with gr.Row():
-            pos_node = gr.Textbox(label="Positive prompt node ID", value=CFG.node_mapping.positive_prompt_node)
-            pos_input = gr.Textbox(label="…input key", value=CFG.node_mapping.positive_prompt_input)
-        with gr.Row():
-            neg_node = gr.Textbox(label="Negative prompt node ID", value=CFG.node_mapping.negative_prompt_node)
-            neg_input = gr.Textbox(label="…input key", value=CFG.node_mapping.negative_prompt_input)
-        with gr.Row():
-            seed_node = gr.Textbox(label="Seed node ID", value=CFG.node_mapping.seed_node)
-            seed_input = gr.Textbox(label="…input key", value=CFG.node_mapping.seed_input)
-        storyboard_path = gr.Textbox(label="Registry .xlsx path", value=CFG.storyboard_path)
-        mock_mode = gr.Checkbox(label="Mock mode (no real ComfyUI calls)", value=CFG.mock_mode)
-        setup_status = gr.Textbox(label="Status", interactive=False)
-        gr.Button("Save Setup").click(
+        with gr.Accordion("What is Mock Mode, exactly?", open=False):
+            gr.Markdown(
+                "When it's ON, the Build tab never contacts a real image "
+                "generator — it makes simple colored placeholder images "
+                "instead, instantly, for free. This lets you learn the "
+                "generate → review → lock flow before wiring up anything "
+                "real. Turn it OFF only once you've built a workflow in "
+                "ComfyUI's own interface and exported it below."
+            )
+        mock_mode = gr.Checkbox(
+            label="Mock Mode (recommended while you're learning the tool)",
+            value=CFG.mock_mode,
+        )
+        with gr.Accordion("Real image generator connection (advanced)", open=not CFG.mock_mode):
+            gr.Markdown(
+                "This section only matters once you turn Mock Mode off."
+            )
+            comfyui_url = gr.Textbox(
+                label="ComfyUI URL",
+                value=CFG.comfyui_url,
+                info="Where ComfyUI is running. If it's on this same computer, the default is usually correct.",
+            )
+            workflow_file = gr.File(
+                label="Workflow file",
+                file_types=[".json"],
+                info="In ComfyUI, build and test your image workflow, then use Save (API Format) to export it as a .json file, and upload it here.",
+            )
+            gr.Markdown("**Which part of the workflow does what?** Every workflow is laid out a little differently, so tell the tool which piece is which:")
+            with gr.Row():
+                pos_node = gr.Textbox(label="Prompt (positive) node ID", value=CFG.node_mapping.positive_prompt_node,
+                                       info="The ID number of the node where your main description goes, e.g. '6'.")
+                pos_input = gr.Textbox(label="...field name on that node", value=CFG.node_mapping.positive_prompt_input,
+                                        info="Usually 'text' — leave as-is unless you know otherwise.")
+            with gr.Row():
+                neg_node = gr.Textbox(label="What-to-avoid node ID", value=CFG.node_mapping.negative_prompt_node,
+                                       info="The node where you list things you don't want to see. Optional.")
+                neg_input = gr.Textbox(label="...field name on that node", value=CFG.node_mapping.negative_prompt_input)
+            with gr.Row():
+                seed_node = gr.Textbox(label="Seed node ID", value=CFG.node_mapping.seed_node,
+                                        info="Controls randomness — the same seed + same prompt reproduces the same image.")
+                seed_input = gr.Textbox(label="...field name on that node", value=CFG.node_mapping.seed_input)
+        storyboard_path = gr.Textbox(
+            label="Where should locked images be recorded?",
+            value=CFG.storyboard_path,
+            info="A spreadsheet file. It'll be created automatically the first time you lock something.",
+        )
+        setup_status = gr.Markdown("")
+        gr.Button("Save Setup", variant="primary").click(
             setup_save,
             inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
                     seed_node, seed_input, storyboard_path, mock_mode],
             outputs=setup_status,
         )
 
-    with gr.Tab("Build"):
-        entry_id = gr.Textbox(label="entry_id", placeholder="1.1  /  CHAR:pig  /  MASTER:farm_field")
-        entry_type = gr.Dropdown(label="entry_type", choices=["SHOT", "CHAR", "MASTER", "PROP"], value="SHOT")
-        beat = gr.Textbox(label="beat")
-        description = gr.Textbox(label="description", lines=2)
-        prompt_positive = gr.Textbox(label="prompt_positive", lines=3)
-        prompt_negative = gr.Textbox(label="prompt_negative_add", lines=2)
+    with gr.Tab("🛠️ Build"):
+        gr.Markdown(
+            "Work through the steps top to bottom. Nothing is saved "
+            "permanently until you hit **Lock** at the very end."
+        )
+
+        gr.Markdown("#### Step 1 — Name what you're making")
         with gr.Row():
-            base_seed = gr.Number(label="base seed (blank = random)", value=None)
-            n_variants = gr.Slider(label="variants", minimum=1, maximum=8, step=1, value=4)
-        gen_btn = gr.Button("Generate variants")
-        gallery = gr.Gallery(label="Variants", columns=4)
-        gen_status = gr.Textbox(label="Generation status", interactive=False)
+            entry_id = gr.Textbox(
+                label="Name",
+                placeholder="e.g. CHAR:pig, MASTER:farm_field, or a shot number like 1.1",
+                info="Use CHAR: for a character, MASTER: for a recurring backdrop/prop, or a shot number for a single scene.",
+            )
+            entry_type = gr.Dropdown(
+                label="Type",
+                choices=["SHOT", "CHAR", "MASTER", "PROP"],
+                value="SHOT",
+                info="What kind of thing this is.",
+            )
+        beat = gr.Textbox(label="Section / beat (optional)", info="Which part of the story this belongs to, if relevant.")
+        description = gr.Textbox(label="Short description (for your own reference later)", lines=2,
+                                  placeholder="e.g. 'the pig, front-facing, tweed cap'")
+
+        gr.Markdown("#### Step 2 — Describe what you want to see")
+        prompt_positive = gr.Textbox(
+            label="Describe the image", lines=3,
+            placeholder="e.g. a dignified pig wearing a tweed cap and waistcoat, hand-painted illustration style",
+            info="This is what the generator will try to draw.",
+        )
+        prompt_negative = gr.Textbox(
+            label="Things to avoid (optional)", lines=2,
+            placeholder="e.g. no watercolor, no extra limbs",
+            info="Anything that keeps showing up that you don't want.",
+        )
+
+        gr.Markdown("#### Step 3 — Generate some options")
+        with gr.Row():
+            base_seed = gr.Number(label="Seed (leave blank for random)", value=None,
+                                   info="Only fill this in if you want a reproducible starting point.")
+            n_variants = gr.Slider(label="How many versions to generate", minimum=1, maximum=8, step=1, value=4)
+        gen_btn = gr.Button("Generate", variant="primary")
+        gallery = gr.Gallery(label="Your options — each one is labeled with its seed", columns=4)
+        gen_status = gr.Markdown("")
         gen_btn.click(
             build_generate,
             inputs=[entry_id, prompt_positive, prompt_negative, base_seed, n_variants],
             outputs=[gallery, gen_status],
         )
 
-        gr.Markdown("Pick the winner (path + seed as shown in the gallery caption), then lock it.")
-        winner_path = gr.Textbox(label="Winner image path")
-        winner_seed = gr.Number(label="Winner seed")
-        note = gr.Textbox(label="Note (what was tried / why this won)", lines=2)
-        lock_btn = gr.Button("Lock winner into registry")
-        lock_status = gr.Textbox(label="Lock status", interactive=False)
+        gr.Markdown(
+            "#### Step 4 — Which one looks right?\n"
+            "Click an image above to see it larger, then copy its file path and seed "
+            "(shown under the image) into the two boxes below."
+        )
+        with gr.Row():
+            winner_path = gr.Textbox(label="Winning image's file path")
+            winner_seed = gr.Number(label="Winning image's seed")
+        note = gr.Textbox(
+            label="Why this one? (this gets saved with the record, permanently)",
+            lines=2,
+            placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
+        )
+
+        gr.Markdown("#### Step 5 — Lock it in")
+        lock_btn = gr.Button("🔒 Lock this into the Registry", variant="primary")
+        lock_status = gr.Markdown("")
         lock_btn.click(
             build_lock,
             inputs=[entry_id, entry_type, beat, description, prompt_positive,
@@ -240,11 +413,16 @@ with gr.Blocks(title="ComfyUI Director Harness") as demo:
             outputs=lock_status,
         )
 
-    with gr.Tab("Registry"):
-        gr.Markdown("Read-only view of everything locked so far.")
+    with gr.Tab("📋 Registry"):
+        gr.Markdown(
+            "Everything you've locked so far. If you lock a new version of "
+            "something you've already named (say, a second pass on "
+            "`CHAR:pig`), it updates that same entry and adds your new note "
+            "underneath the old one — it won't create a duplicate."
+        )
         refresh_btn = gr.Button("Refresh")
         registry_table = gr.Dataframe(
-            headers=["entry_id", "entry_type", "beat", "description", "model", "seed", "locked", "image_path"],
+            headers=["Name", "Type", "Section", "Description", "Model", "Seed", "Locked", "Image path"],
             interactive=False,
         )
         refresh_btn.click(registry_refresh, outputs=registry_table)
