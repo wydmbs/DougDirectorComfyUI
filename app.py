@@ -32,10 +32,26 @@ import config as cfgmod
 import storyboard_store as store
 import sheet_composer as composer
 import harry_advisor as harry
+import project_manager as projects
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 CFG = cfgmod.load_config()
-os.makedirs(CFG.images_dir, exist_ok=True)
+ACTIVE_PROJECT_ID = projects.ensure_active(CFG.active_project_id)
+
+
+def activate_project(project_id):
+    global ACTIVE_PROJECT_ID, CFG
+    ACTIVE_PROJECT_ID = projects.ensure_active(project_id)
+    workspace = projects.workspace(ACTIVE_PROJECT_ID)
+    CFG.active_project_id = ACTIVE_PROJECT_ID
+    CFG.storyboard_path = workspace["storyboard"]
+    CFG.images_dir = workspace["images"]
+    harry.set_library_dir(workspace["library"])
+    os.makedirs(CFG.images_dir, exist_ok=True)
+    cfgmod.save_config(CFG)
+
+
+activate_project(ACTIVE_PROJECT_ID)
 
 SHEET_TYPES = ("CHAR", "MASTER", "PROP")
 
@@ -103,6 +119,34 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
 # ---------------------------------------------------------------------------
 # Harry the Advisor
 # ---------------------------------------------------------------------------
+
+
+def project_progress_html():
+    project = projects.get_project(ACTIVE_PROJECT_ID)
+    entries = [row for row in store.list_entries(CFG.storyboard_path) if row.get("locked")]
+    count = lambda kind: len([row for row in entries if row.get("entry_type") == kind])
+    source_count = len(list(harry.LIBRARY_DIR.glob("*/metadata.json"))) if harry.LIBRARY_DIR.exists() else 0
+    plan_count = len(list(harry.LIBRARY_DIR.glob("plan_*.json"))) if harry.LIBRARY_DIR.exists() else 0
+    preset_count = len(harry.load_presets())
+    beat_count = len(store.list_beats(CFG.storyboard_path))
+    rows = [("Source", f"{source_count} revision(s)", source_count), ("Harry plan", f"{plan_count} revision(s)", plan_count), ("Build drafts", f"{preset_count} approved", preset_count), ("Characters", f"{count('CHAR')} locked", count('CHAR')), ("Backdrops", f"{count('MASTER')} locked", count('MASTER')), ("Props", f"{count('PROP')} locked", count('PROP')), ("Shots", f"{count('SHOT')} locked", count('SHOT')), ("Narration timing", f"{beat_count} beat(s)", beat_count)]
+    items = "".join(f'<li class="{"done" if done else "next"}"><b>{"✓" if done else "○"} {label}</b><span>{detail}</span></li>' for label, detail, done in rows)
+    return f'<aside class="project-progress"><div class="progress-kicker">ACTIVE PROJECT</div><h3>{project.get("title", "Untitled Project")}</h3><div class="progress-version">{project.get("version", "v1")}</div><h4>Progress</h4><ul>{items}<li><b>○ Video & QA</b><span>future module</span></li></ul></aside>'
+
+
+def switch_project_ui(project_id):
+    activate_project(project_id)
+    project = projects.get_project(ACTIVE_PROJECT_ID)
+    return gr.update(value=ACTIVE_PROJECT_ID), f"**{project['title']}** — {project['version']}", project_progress_html()
+
+
+def create_project_ui(title, version, description):
+    if not (title or "").strip():
+        return gr.update(), "", gr.update(visible=True), "⚠️ Enter a project title."
+    project = projects.create_project(title, version, description)
+    activate_project(project["project_id"])
+    return gr.update(choices=projects.choices(), value=project["project_id"]), f"**{project['title']}** — {project['version']}", gr.update(visible=False), f"Created and activated {project['title']}."
+
 
 def harry_provider_status(provider):
     return harry.provider_status(provider)
@@ -829,6 +873,12 @@ body, .gradio-container {
 .harry-source-option p, .harry-source-option strong {
     color: var(--horizon-navy) !important;
 }
+.project-toolbar { background: var(--storm-slate); border-radius: 12px; margin: 8px 0 14px; padding: 8px 12px; }
+.project-toolbar p { color: var(--cloud-linen) !important; margin: 7px 0 !important; }
+.project-progress { background: var(--cloud-linen); border: 1px solid #B8C1BE; border-left: 6px solid var(--signal-amber); border-radius: 12px; color: var(--horizon-navy); padding: 14px; position: fixed; right: 18px; top: 112px; width: 250px; z-index: 10; box-shadow: 0 4px 12px rgb(23 37 52 / 10%); }
+.project-progress h3 { color: var(--horizon-navy); font-size: 1.1rem; margin: 3px 0; }.project-progress h4 { border-top: 1px solid #B8C1BE; color: var(--horizon-navy); margin: 12px 0 6px; padding-top: 9px; }.progress-kicker, .progress-version { color: var(--weathered-blue-gray); font-size: .75rem; font-weight: 700; letter-spacing: .06em; }.project-progress ul { list-style: none; margin: 0; padding: 0; }.project-progress li { border-bottom: 1px solid #DCE2DF; display: flex; justify-content: space-between; padding: 7px 0; }.project-progress li span { color: var(--weathered-blue-gray); font-size: .8rem; }.project-progress .done b { color: var(--sea-glass); }.project-progress .next b { color: var(--horizon-navy); }
+@media (max-width: 1150px) { .project-progress { position: static; width: auto; margin: 10px 0; } }
+
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
@@ -949,6 +999,18 @@ Otherwise, open **Build** and create the first artifact directly.
 
 with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as demo:
     gr.Markdown("# 🎬 ComfyUI Director Harness")
+    with gr.Row(elem_classes=["project-toolbar"]):
+        project_selector = gr.Dropdown(label="Active project", choices=projects.choices(), value=ACTIVE_PROJECT_ID, scale=3)
+        project_label = gr.Markdown(f"**{projects.get_project(ACTIVE_PROJECT_ID)['title']}** — {projects.get_project(ACTIVE_PROJECT_ID)['version']}", scale=2)
+        new_project_btn = gr.Button("New project", scale=0)
+    with gr.Group(visible=False, elem_classes=["step-card"]) as new_project_group:
+        new_project_title = gr.Textbox(label="Project title", placeholder="e.g. Pig and Rooster")
+        with gr.Row():
+            new_project_version = gr.Textbox(label="Starting version", value="v1")
+            new_project_description = gr.Textbox(label="Description (optional)")
+        new_project_confirm = gr.Button("Create project", variant="primary")
+        new_project_status = gr.Markdown("")
+    progress_panel = gr.HTML(project_progress_html())
 
     with gr.Tab("👋 Welcome"):
         with gr.Group(elem_id="welcome-hero"):
@@ -1298,6 +1360,11 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         )
         beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table])
         demo.load(beats_table_refresh, outputs=beats_table)
+
+
+    new_project_btn.click(lambda: gr.update(visible=True), outputs=new_project_group)
+    new_project_confirm.click(create_project_ui, inputs=[new_project_title, new_project_version, new_project_description], outputs=[project_selector, project_label, new_project_group, new_project_status])
+    project_selector.change(switch_project_ui, inputs=project_selector, outputs=[project_selector, project_label, progress_panel])
 
 
 if __name__ == "__main__":

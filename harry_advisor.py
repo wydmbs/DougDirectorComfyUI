@@ -14,6 +14,11 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LIBRARY_DIR = PROJECT_ROOT / "harry_library"
+
+
+def set_library_dir(path):
+    global LIBRARY_DIR
+    LIBRARY_DIR = Path(path)
 OPENSCOUT_CONFIG = Path.home() / "OpenScout" / "openscout" / "config.yaml"
 
 SYSTEM_PROMPT = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
