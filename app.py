@@ -308,10 +308,14 @@ with gr.Blocks(title="ComfyUI Director Harness") as demo:
                 value=CFG.comfyui_url,
                 info="Where ComfyUI is running. If it's on this same computer, the default is usually correct.",
             )
+            gr.Markdown(
+                "In ComfyUI, build and test your image workflow, then use "
+                "**Save (API Format)** to export it as a `.json` file, and "
+                "upload it below."
+            )
             workflow_file = gr.File(
                 label="Workflow file",
                 file_types=[".json"],
-                info="In ComfyUI, build and test your image workflow, then use Save (API Format) to export it as a .json file, and upload it here.",
             )
             gr.Markdown("**Which part of the workflow does what?** Every workflow is laid out a little differently, so tell the tool which piece is which:")
             with gr.Row():
