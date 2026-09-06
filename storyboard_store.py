@@ -1,41 +1,15 @@
 """
-storyboard_store.py — the shared data backbone (see SUITE.md).
+storyboard_store.py — shared Excel data backbone for the Director Harness.
 
-Three sheets in one .xlsx workbook:
-
-  Assets — one row per entry_id (a shot, or a CHAR/MASTER/PROP). Schema
-    generalized from Pig_and_Rooster_Storyboard_v14.xlsx's Shot List tab.
-    For CHAR/MASTER entries, prompt_positive/seed/image_path describe the
-    ASSEMBLED COMPOSITE SHEET, not any one panel — the individual panel
-    generations live in the Panels sheet below.
-
-  Panels — one row per (entry_id, panel_key). A CHAR or MASTER entry is
-    built from several independently-generated panels (front view, angry
-    expression, night variant, etc.) against a FIXED template per
-    entry_type (see sheet_composer.py) — fixed on purpose, so downstream
-    motion/animation work can rely on a panel always sitting in the same
-    position across every character. A plain SHOT entry has no panels; it
-    locks directly into Assets.
-
-  References — mood-board / inspiration images attached to an entry_id
-    before a design is locked. These aren't generations and carry no
-    prompt of their own — just an image and a note on what to borrow from
-    it. Purely input, not part of the final registry record.
-
-Locking again on the same entry_id (or entry_id+panel_key) UPDATES that
-row in place and appends a timestamped line to notes, rather than
-duplicating — this is the inline versioned decision log the old shot list
-kept by hand.
-
-entry_id convention:
-    shot_id       e.g. "1.1", "4.3b"
-    CHAR:<name>   e.g. "CHAR:pig"
-    MASTER:<name> e.g. "MASTER:farm_field"
-    PROP:<name>   e.g. "PROP:crate"
+Assets holds one row per shot or reusable asset. Panels holds independently
+locked sheet panels. References holds mood-board images. Beats holds
+narration timing rows. Re-locking an asset or panel updates its row and
+appends to its decision log.
 """
 
 import os
 from datetime import datetime, timezone
+
 from openpyxl import Workbook, load_workbook
 
 ASSETS_SHEET = "Assets"
@@ -59,51 +33,44 @@ BEATS_SHEET = "Beats"
 BEATS_COLUMNS = ["order", "beat", "start_s", "end_s", "duration_s", "source", "notes"]
 
 
-# ---------------------------------------------------------------------------
-# Generic sheet plumbing (shared by Assets / Panels / References)
-# ---------------------------------------------------------------------------
-
 def _open_or_create_workbook(path: str) -> Workbook:
     if os.path.exists(path):
         return load_workbook(path)
-    wb = Workbook()
-    wb.remove(wb.active)
-    return wb
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    return workbook
 
 
-def _ensure_sheet(wb: Workbook, sheet_name: str, columns: list):
-    """Create the sheet with a header row if missing. If it exists but is
-    missing columns added in a later version of this schema, append those
-    columns to the header rather than failing — keeps older workbooks
-    forward-compatible without a manual migration step."""
-    if sheet_name not in wb.sheetnames:
-        ws = wb.create_sheet(sheet_name)
-        ws.append(columns)
-        return ws
-    ws = wb[sheet_name]
-    existing = [c.value for c in ws[1]] if ws.max_row >= 1 else []
-    for col in columns:
-        if col not in existing:
-            ws.cell(1, ws.max_column + 1 if ws.max_row >= 1 else 1, col)
-            existing.append(col)
-    return ws
+def _ensure_sheet(workbook: Workbook, sheet_name: str, columns: list):
+    if sheet_name not in workbook.sheetnames:
+        worksheet = workbook.create_sheet(sheet_name)
+        worksheet.append(columns)
+        return worksheet
+
+    worksheet = workbook[sheet_name]
+    existing = [cell.value for cell in worksheet[1]] if worksheet.max_row >= 1 else []
+    for column in columns:
+        if column not in existing:
+            worksheet.cell(1, worksheet.max_column + 1 if worksheet.max_row >= 1 else 1, column)
+            existing.append(column)
+    return worksheet
 
 
-def _col_index(ws, name: str) -> int:
-    for idx, cell in enumerate(ws[1], start=1):
+def _col_index(worksheet, name: str) -> int:
+    for index, cell in enumerate(worksheet[1], start=1):
         if cell.value == name:
-            return idx
-    raise KeyError(f"Column '{name}' not found in '{ws.title}' sheet header row.")
+            return index
+    raise KeyError(f"Column '{name}' not found in '{worksheet.title}' sheet header row.")
 
 
-def _find_row(ws, id_col: int, key: str, id_col2: int = None, key2: str = None):
-    for row in range(2, ws.max_row + 1):
-        val = ws.cell(row, id_col).value
-        if val is None or str(val) != str(key):
+def _find_row(worksheet, id_col: int, key: str, id_col2: int = None, key2: str = None):
+    for row in range(2, worksheet.max_row + 1):
+        value = worksheet.cell(row, id_col).value
+        if value is None or str(value) != str(key):
             continue
         if id_col2 is not None:
-            val2 = ws.cell(row, id_col2).value
-            if val2 is None or str(val2) != str(key2):
+            value2 = worksheet.cell(row, id_col2).value
+            if value2 is None or str(value2) != str(key2):
                 continue
         return row
     return None
@@ -112,28 +79,24 @@ def _find_row(ws, id_col: int, key: str, id_col2: int = None, key2: str = None):
 def _read_sheet_rows(path: str, sheet_name: str, columns: list) -> list:
     if not os.path.exists(path):
         return []
-    wb = load_workbook(path)
-    if sheet_name not in wb.sheetnames:
+    workbook = load_workbook(path)
+    if sheet_name not in workbook.sheetnames:
         return []
-    ws = wb[sheet_name]
-    header = [c.value for c in ws[1]] if ws.max_row >= 1 else []
+    worksheet = workbook[sheet_name]
+    header = [cell.value for cell in worksheet[1]] if worksheet.max_row >= 1 else []
     rows = []
-    for r in range(2, ws.max_row + 1):
-        row_vals = [ws.cell(r, c).value for c in range(1, len(header) + 1)]
-        if all(v is None for v in row_vals):
+    for row in range(2, worksheet.max_row + 1):
+        values = [worksheet.cell(row, column).value for column in range(1, len(header) + 1)]
+        if all(value is None for value in values):
             continue
-        record = dict(zip(header, row_vals))
-        rows.append({col: record.get(col) for col in columns})
+        record = dict(zip(header, values))
+        rows.append({column: record.get(column) for column in columns})
     return rows
 
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-
-# ---------------------------------------------------------------------------
-# Assets sheet
-# ---------------------------------------------------------------------------
 
 def list_entries(path: str) -> list:
     return _read_sheet_rows(path, ASSETS_SHEET, ASSETS_COLUMNS)
@@ -146,36 +109,21 @@ def get_entry(path: str, entry_id: str) -> dict:
     return {}
 
 
-def lock_entry(
-    path: str,
-    entry_id: str,
-    entry_type: str,
-    beat: str,
-    description: str,
-    prompt_positive: str,
-    prompt_negative_add: str,
-    model: str,
-    seed,
-    reused_from: str,
-    image_path: str,
-    note: str,
-) -> None:
-    """Used directly for plain SHOT entries (one image, one prompt). CHAR /
-    MASTER entries instead accumulate panels via lock_panel() and reach
-    Assets only through set_composite_image()."""
-    wb = _open_or_create_workbook(path)
-    ws = _ensure_sheet(wb, ASSETS_SHEET, ASSETS_COLUMNS)
-    id_col = _col_index(ws, "entry_id")
-    row = _find_row(ws, id_col, entry_id)
-
+def lock_entry(path: str, entry_id: str, entry_type: str, beat: str, description: str,
+               prompt_positive: str, prompt_negative_add: str, model: str, seed,
+               reused_from: str, image_path: str, note: str) -> None:
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, ASSETS_SHEET, ASSETS_COLUMNS)
+    id_col = _col_index(worksheet, "entry_id")
+    row = _find_row(worksheet, id_col, entry_id)
     note_line = f"[{_timestamp()}] {note}" if note else f"[{_timestamp()}] locked"
 
     if row is None:
-        row = ws.max_row + 1
-        ws.cell(row, id_col, entry_id)
+        row = worksheet.max_row + 1
+        worksheet.cell(row, id_col, entry_id)
         existing_notes = ""
     else:
-        existing_notes = ws.cell(row, _col_index(ws, "notes")).value or ""
+        existing_notes = worksheet.cell(row, _col_index(worksheet, "notes")).value or ""
 
     values = {
         "entry_type": entry_type,
@@ -190,31 +138,25 @@ def lock_entry(
         "image_path": image_path,
         "notes": (existing_notes + "\n" + note_line).strip() if existing_notes else note_line,
     }
-    for col_name, val in values.items():
-        ws.cell(row, _col_index(ws, col_name), val)
-
-    wb.save(path)
+    for column, value in values.items():
+        worksheet.cell(row, _col_index(worksheet, column), value)
+    workbook.save(path)
 
 
 def set_composite_image(path: str, entry_id: str, entry_type: str, template: str,
-                          composite_image_path: str, note: str = "") -> None:
-    """Save/update the assembled composite sheet for a CHAR/MASTER entry.
-    Distinct from lock_entry: this doesn't touch prompt/seed fields (those
-    live per-panel), it just records the rendered sheet as this entry's
-    reference image."""
-    wb = _open_or_create_workbook(path)
-    ws = _ensure_sheet(wb, ASSETS_SHEET, ASSETS_COLUMNS)
-    id_col = _col_index(ws, "entry_id")
-    row = _find_row(ws, id_col, entry_id)
-
+                        composite_image_path: str, note: str = "") -> None:
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, ASSETS_SHEET, ASSETS_COLUMNS)
+    id_col = _col_index(worksheet, "entry_id")
+    row = _find_row(worksheet, id_col, entry_id)
     note_line = f"[{_timestamp()}] {note}" if note else f"[{_timestamp()}] composite sheet rendered"
 
     if row is None:
-        row = ws.max_row + 1
-        ws.cell(row, id_col, entry_id)
+        row = worksheet.max_row + 1
+        worksheet.cell(row, id_col, entry_id)
         existing_notes = ""
     else:
-        existing_notes = ws.cell(row, _col_index(ws, "notes")).value or ""
+        existing_notes = worksheet.cell(row, _col_index(worksheet, "notes")).value or ""
 
     values = {
         "entry_type": entry_type,
@@ -223,53 +165,37 @@ def set_composite_image(path: str, entry_id: str, entry_type: str, template: str
         "composite_image_path": composite_image_path,
         "notes": (existing_notes + "\n" + note_line).strip() if existing_notes else note_line,
     }
-    for col_name, val in values.items():
-        ws.cell(row, _col_index(ws, col_name), val)
+    for column, value in values.items():
+        worksheet.cell(row, _col_index(worksheet, column), value)
+    workbook.save(path)
 
-    wb.save(path)
-
-
-# ---------------------------------------------------------------------------
-# Panels sheet (per-panel generations for CHAR / MASTER sheets)
-# ---------------------------------------------------------------------------
 
 def list_panels(path: str, entry_id: str) -> list:
-    return [r for r in _read_sheet_rows(path, PANELS_SHEET, PANELS_COLUMNS)
-            if str(r.get("entry_id")) == str(entry_id)]
+    return [row for row in _read_sheet_rows(path, PANELS_SHEET, PANELS_COLUMNS)
+            if str(row.get("entry_id")) == str(entry_id)]
 
 
 def get_panel_images(path: str, entry_id: str) -> dict:
-    """panel_key -> image_path, for feeding straight into sheet_composer."""
-    return {r["panel_key"]: r["image_path"] for r in list_panels(path, entry_id) if r.get("image_path")}
+    return {row["panel_key"]: row["image_path"] for row in list_panels(path, entry_id)
+            if row.get("image_path")}
 
 
-def lock_panel(
-    path: str,
-    entry_id: str,
-    panel_key: str,
-    prompt_positive: str,
-    prompt_negative_add: str,
-    seed,
-    image_path: str,
-    note: str,
-) -> None:
-    """Locking the same (entry_id, panel_key) again updates that panel's
-    row in place and appends to its note log, same pattern as lock_entry."""
-    wb = _open_or_create_workbook(path)
-    ws = _ensure_sheet(wb, PANELS_SHEET, PANELS_COLUMNS)
-    id_col = _col_index(ws, "entry_id")
-    panel_col = _col_index(ws, "panel_key")
-    row = _find_row(ws, id_col, entry_id, panel_col, panel_key)
-
+def lock_panel(path: str, entry_id: str, panel_key: str, prompt_positive: str,
+               prompt_negative_add: str, seed, image_path: str, note: str) -> None:
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, PANELS_SHEET, PANELS_COLUMNS)
+    id_col = _col_index(worksheet, "entry_id")
+    panel_col = _col_index(worksheet, "panel_key")
+    row = _find_row(worksheet, id_col, entry_id, panel_col, panel_key)
     note_line = f"[{_timestamp()}] {note}" if note else f"[{_timestamp()}] locked"
 
     if row is None:
-        row = ws.max_row + 1
-        ws.cell(row, id_col, entry_id)
-        ws.cell(row, panel_col, panel_key)
+        row = worksheet.max_row + 1
+        worksheet.cell(row, id_col, entry_id)
+        worksheet.cell(row, panel_col, panel_key)
         existing_notes = ""
     else:
-        existing_notes = ws.cell(row, _col_index(ws, "notes")).value or ""
+        existing_notes = worksheet.cell(row, _col_index(worksheet, "notes")).value or ""
 
     values = {
         "prompt_positive": prompt_positive,
@@ -279,60 +205,49 @@ def lock_panel(
         "locked": True,
         "notes": (existing_notes + "\n" + note_line).strip() if existing_notes else note_line,
     }
-    for col_name, val in values.items():
-        ws.cell(row, _col_index(ws, col_name), val)
+    for column, value in values.items():
+        worksheet.cell(row, _col_index(worksheet, column), value)
+    workbook.save(path)
 
-    wb.save(path)
-
-
-# ---------------------------------------------------------------------------
-# References sheet (mood-board / inspiration images)
-# ---------------------------------------------------------------------------
 
 def list_references(path: str, entry_id: str) -> list:
-    return [r for r in _read_sheet_rows(path, REFERENCES_SHEET, REFERENCES_COLUMNS)
-            if str(r.get("entry_id")) == str(entry_id)]
+    return [row for row in _read_sheet_rows(path, REFERENCES_SHEET, REFERENCES_COLUMNS)
+            if str(row.get("entry_id")) == str(entry_id)]
 
 
 def add_reference(path: str, entry_id: str, image_path: str, note: str) -> None:
-    """Always appends — a mood board can hold several images for the same
-    entry_id, there's no single 'current' reference to overwrite."""
-    wb = _open_or_create_workbook(path)
-    ws = _ensure_sheet(wb, REFERENCES_SHEET, REFERENCES_COLUMNS)
-    row = ws.max_row + 1
-    ws.cell(row, _col_index(ws, "entry_id"), entry_id)
-    ws.cell(row, _col_index(ws, "image_path"), image_path)
-    ws.cell(row, _col_index(ws, "note"), note)
-    ws.cell(row, _col_index(ws, "added_at"), _timestamp())
-    wb.save(path)
+    workbook = _open_or_create_workbook(path)
+    worksheet = _ensure_sheet(workbook, REFERENCES_SHEET, REFERENCES_COLUMNS)
+    row = worksheet.max_row + 1
+    worksheet.cell(row, _col_index(worksheet, "entry_id"), entry_id)
+    worksheet.cell(row, _col_index(worksheet, "image_path"), image_path)
+    worksheet.cell(row, _col_index(worksheet, "note"), note)
+    worksheet.cell(row, _col_index(worksheet, "added_at"), _timestamp())
+    workbook.save(path)
 
-
-# ---------------------------------------------------------------------------
-# Beats sheet (the Runtime Check equivalent — beat-level timing against the
-# actual narration audio, not per-shot durations)
-# ---------------------------------------------------------------------------
 
 def list_beats(path: str) -> list:
     rows = _read_sheet_rows(path, BEATS_SHEET, BEATS_COLUMNS)
-    return sorted(rows, key=lambda r: (r.get("order") if r.get("order") is not None else 0))
+    return sorted(rows, key=lambda row: row.get("order") if row.get("order") is not None else 0)
+
+
+def _rounded_or_blank(value):
+    return round(value, 2) if value is not None else None
 
 
 def set_beats(path: str, beats: list, source: str) -> None:
-    """Wholesale replace — beat timings are recomputed as a whole each time
-    (from a word-count estimate, or from a real forced-alignment run), not
-    edited row by row like Assets/Panels. Each item in `beats` needs:
-    beat, start_s, end_s, duration_s (order is assigned by list position)."""
-    wb = _open_or_create_workbook(path)
-    if BEATS_SHEET in wb.sheetnames:
-        wb.remove(wb[BEATS_SHEET])
-    ws = _ensure_sheet(wb, BEATS_SHEET, BEATS_COLUMNS)
-    for i, b in enumerate(beats, start=1):
-        row = i + 1
-        ws.cell(row, _col_index(ws, "order"), i)
-        ws.cell(row, _col_index(ws, "beat"), b.get("beat"))
-        ws.cell(row, _col_index(ws, "start_s"), round(b.get("start_s", 0), 2))
-        ws.cell(row, _col_index(ws, "end_s"), round(b.get("end_s", 0), 2))
-        ws.cell(row, _col_index(ws, "duration_s"), round(b.get("duration_s", 0), 2))
-        ws.cell(row, _col_index(ws, "source"), source)
-        ws.cell(row, _col_index(ws, "notes"), b.get("notes", ""))
-    wb.save(path)
+    """Replace timing rows while preserving unresolved values as blank cells."""
+    workbook = _open_or_create_workbook(path)
+    if BEATS_SHEET in workbook.sheetnames:
+        workbook.remove(workbook[BEATS_SHEET])
+    worksheet = _ensure_sheet(workbook, BEATS_SHEET, BEATS_COLUMNS)
+    for index, beat in enumerate(beats, start=1):
+        row = index + 1
+        worksheet.cell(row, _col_index(worksheet, "order"), index)
+        worksheet.cell(row, _col_index(worksheet, "beat"), beat.get("beat"))
+        worksheet.cell(row, _col_index(worksheet, "start_s"), _rounded_or_blank(beat.get("start_s")))
+        worksheet.cell(row, _col_index(worksheet, "end_s"), _rounded_or_blank(beat.get("end_s")))
+        worksheet.cell(row, _col_index(worksheet, "duration_s"), _rounded_or_blank(beat.get("duration_s")))
+        worksheet.cell(row, _col_index(worksheet, "source"), beat.get("source") or source)
+        worksheet.cell(row, _col_index(worksheet, "notes"), beat.get("notes", ""))
+    workbook.save(path)
