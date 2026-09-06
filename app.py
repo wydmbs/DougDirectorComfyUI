@@ -810,15 +810,20 @@ body, .gradio-container {
     border: 1px solid var(--weathered-blue-gray);
     border-left: 6px solid var(--signal-amber);
     border-radius: 10px;
-    color: var(--horizon-navy);
     line-height: 1.5;
     margin: 8px 0 14px;
     padding: 12px 14px;
+}
+.harry-intake, .harry-intake p, .harry-intake span, .harry-intake strong {
+    color: var(--horizon-navy) !important;
+    opacity: 1 !important;
 }
 .harry-source-option {
     background: var(--cloud-linen) !important;
     border: 1px solid #B8C1BE !important;
     border-radius: 10px;
+    box-sizing: border-box;
+    min-height: 470px;
     padding: 12px !important;
 }
 .harry-source-option p, .harry-source-option strong {
