@@ -1,0 +1,3 @@
+gradio>=4.44
+openpyxl>=3.1
+Pillow>=10.0
