@@ -881,85 +881,65 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 # ---------------------------------------------------------------------------
 
 WELCOME_MARKDOWN = """
-# 👋 Welcome — what this tool is for
+# Welcome — from story to production plan
 
-If you're generating character art, backdrops, or shot images with an AI
-image model, you'll usually make several versions before one actually looks
-right — and once it does, you want to **remember exactly how you made it**
-so you (or a teammate) can reuse or reproduce it later.
+ComfyUI Director Harness turns a script, story, poem, or narration into a
+clear production workspace. It keeps the creative decisions that matter:
+what must be built, how it should look, which prompt and seed produced it,
+and what needs to remain consistent later.
 
-This tool is that memory. For a single shot, it's: **generate a batch of
-options → pick your favorite → lock it in with a note about why.**
+**Start with Harry the Advisor** when you have source material. Harry reads
+your text or local transcription, recommends characters, backdrops, props,
+and draft shots, then gives you an editable approval list. Approved items
+become **Build presets** only — nothing is generated or locked automatically.
 
-For a **character, recurring backdrop, or key object/prop**, it's two
-stages. First, **Concept**: explore freely with reference images as
-inspiration, generate variants, and settle on the one design that's *the*
-character, backdrop, or artifact. Then, **Sheet panels**: build each pose,
-angle, or variant of a fixed template, each one staying tight to that
-locked concept rather than reinventing it — assembled automatically into
-one composite reference sheet.
+In **Build**, first choose whether you are making a **Character**, **Backdrop**,
+**Prop**, or **Shot**. A Character has a permanent `CHAR:name` trigger for
+future prompting and LoRA work. Reusable assets begin with a concept, then
+continue into consistent reference-sheet panels. A Shot is a direct
+prompt → generate → choose → lock loop.
 
-### The tabs, in the order you'll actually use them
+### The tabs, in the order you will usually use them
 
-1. **⚙️ Setup** — tell the tool where your image generator lives. Skip this
-   at first — Mock Mode is on by default and lets you try everything with
-   fake placeholder images.
-2. **🛠️ Build** — name what you're making. A plain shot is one
-   generate → pick → lock cycle. A character or backdrop walks you through
-   its fixed set of panels one at a time, then renders them into one sheet.
-3. **📋 Registry** — everything you've locked so far, including rendered
-   sheets.
+1. **Setup** — connect ComfyUI and choose Harry's provider. Claude is the
+   default; Azure OpenAI can reuse your local OpenScout configuration.
+2. **Harry the Advisor** — attach a text document, paste text, or attach audio
+   and transcribe it locally. Review, edit, and approve Harry's recommendations.
+3. **Build** — choose the artifact type, load an approved draft if useful,
+   generate options, and lock only the decisions you want to keep.
+4. **Registry** — inspect everything that is permanently locked, including
+   reference sheets and narration beat timing.
 
-### The flow, visually
+### The production flow
 """
 
 FLOW_SVG = """
-<svg viewBox="0 0 900 170" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:820px;font-family:sans-serif;">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#5C6C77"/>
-    </marker>
-  </defs>
-  <g font-size="14" text-anchor="middle">
-    <rect x="10" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#5C6C77" stroke-width="1.5"/>
-    <text x="85" y="80" font-weight="bold">1. Name it</text>
-    <text x="85" y="100" font-size="12" fill="#172534">CHAR:pig, 1.1, etc.</text>
-
-    <rect x="190" y="50" width="150" height="70" rx="10" fill="#F5F1E8" stroke="#B9824A" stroke-width="1.5"/>
-    <text x="265" y="80" font-weight="bold">2. Describe it</text>
-    <text x="265" y="100" font-size="12" fill="#172534">prompt + what to avoid</text>
-
-    <rect x="370" y="50" width="150" height="70" rx="10" fill="#FFF4D6" stroke="#E99322" stroke-width="1.5"/>
-    <text x="445" y="80" font-weight="bold">3. Generate</text>
-    <text x="445" y="100" font-size="12" fill="#172534">a few options at once</text>
-
-    <rect x="550" y="50" width="150" height="70" rx="10" fill="#FFF9EA" stroke="#F6BE45" stroke-width="1.5"/>
-    <text x="625" y="80" font-weight="bold">4. Pick a winner</text>
-    <text x="625" y="100" font-size="12" fill="#172534">the one that looks right</text>
-
-    <rect x="730" y="50" width="150" height="70" rx="10" fill="#F2F7F2" stroke="#3E7B68" stroke-width="1.5"/>
-    <text x="805" y="80" font-weight="bold">5. Lock it</text>
-    <text x="805" y="100" font-size="12" fill="#172534">saved + noted, for good</text>
+<svg viewBox="0 0 1120 180" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:1040px;font-family:sans-serif;">
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#5C6C77"/></marker></defs>
+  <g font-size="14" text-anchor="middle" fill="#172534">
+    <rect x="10" y="48" width="200" height="78" rx="10" fill="#F5F1E8" stroke="#5C6C77" stroke-width="1.5"/>
+    <text x="110" y="78" font-weight="bold">1. Bring your source</text><text x="110" y="101" font-size="12">attach text, paste text,</text><text x="110" y="116" font-size="12">or transcribe audio</text>
+    <rect x="235" y="48" width="200" height="78" rx="10" fill="#FFF9EA" stroke="#E8AE72" stroke-width="1.5"/>
+    <text x="335" y="78" font-weight="bold">2. Ask Harry</text><text x="335" y="101" font-size="12">review and refine his</text><text x="335" y="116" font-size="12">prep recommendations</text>
+    <rect x="460" y="48" width="200" height="78" rx="10" fill="#F5F1E8" stroke="#C98D68" stroke-width="1.5"/>
+    <text x="560" y="78" font-weight="bold">3. Approve drafts</text><text x="560" y="101" font-size="12">editable Build presets;</text><text x="560" y="116" font-size="12">nothing is locked yet</text>
+    <rect x="685" y="48" width="200" height="78" rx="10" fill="#FFF4D6" stroke="#E8AE72" stroke-width="1.5"/>
+    <text x="785" y="78" font-weight="bold">4. Build it</text><text x="785" y="101" font-size="12">choose type, prompt,</text><text x="785" y="116" font-size="12">generate and select</text>
+    <rect x="910" y="48" width="200" height="78" rx="10" fill="#F2F7F2" stroke="#3E7B68" stroke-width="1.5"/>
+    <text x="1010" y="78" font-weight="bold">5. Lock it</text><text x="1010" y="101" font-size="12">record the winning asset,</text><text x="1010" y="116" font-size="12">prompt, seed, and note</text>
   </g>
-
-  <line x1="160" y1="85" x2="188" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="340" y1="85" x2="368" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="520" y1="85" x2="548" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="700" y1="85" x2="728" y2="85" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
-
-  <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#B8C1BE" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#5C6C77">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
+  <line x1="210" y1="87" x2="233" y2="87" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/><line x1="435" y1="87" x2="458" y2="87" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/><line x1="660" y1="87" x2="683" y2="87" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/><line x1="885" y1="87" x2="908" y2="87" stroke="#5C6C77" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="560" y="160" font-size="12" text-anchor="middle" fill="#F5F1E8">Harry's recommendations are editable drafts. Only Build's Lock action makes a permanent registry record.</text>
 </svg>
 """
 
 WELCOME_MARKDOWN_2 = """
-Once something is locked, it shows up permanently in the **Registry** tab —
-that's your project's single source of truth going forward.
+Use the **Harry prep checklist** in Build to track recommended artifacts as you
+complete them. The Registry remains the project's permanent source of truth;
+drafts are planning aids until you lock a result.
 
-Look for a **❓ More info** button next to any field you're unsure about.
-
-**Ready?** Click the **🛠️ Build** tab above and try it — Mock Mode is on, so
-this costs nothing and can't break anything.
+**Ready?** Start in **Harry the Advisor** if you have a story or narration.
+Otherwise, open **Build** and create the first artifact directly.
 """
 
 
