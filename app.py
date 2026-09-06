@@ -277,6 +277,15 @@ def character_choices():
             for row in store.list_characters(CFG.storyboard_path)]
 
 
+def character_trigger(value):
+    slug = "_".join((value or "").strip().lower().replace("-", " ").split())
+    return f"CHAR:{slug}" if slug else "CHAR:your_character_name"
+
+
+def character_trigger_preview(value):
+    return f'<div class="trigger-preview">Canonical trigger: <code>{character_trigger(value)}</code></div>'
+
+
 def select_character_ui(trigger_id):
     character = store.get_character(CFG.storyboard_path, trigger_id)
     if not character:
@@ -285,10 +294,12 @@ def select_character_ui(trigger_id):
             f"Active trigger: `{trigger_id}`. This is the identity used for future LoRA training and prompting.")
 
 
-def create_character_ui(trigger_id, display_name, working_note):
+def create_character_ui(trigger_slug, display_name, working_note):
     try:
+        trigger_id = character_trigger(trigger_slug)
+        if trigger_id == "CHAR:your_character_name":
+            raise ValueError("Enter a character name to create its trigger.")
         store.create_character(CFG.storyboard_path, trigger_id, display_name, working_note)
-        trigger_id = trigger_id.strip()
         return (gr.update(choices=character_choices(), value=trigger_id), trigger_id, display_name.strip(),
                 working_note.strip(), "", "", "", f"Created and selected `{trigger_id}`.")
     except ValueError as error:
@@ -303,10 +314,12 @@ def save_character_ui(trigger_id, display_name, working_note):
         return gr.update(), f"⚠️ {error}"
 
 
-def rename_character_ui(trigger_id, new_trigger_id):
+def rename_character_ui(trigger_id, new_trigger_slug):
     try:
+        new_trigger_id = character_trigger(new_trigger_slug)
+        if new_trigger_id == "CHAR:your_character_name":
+            raise ValueError("Enter a character name for the new trigger.")
         store.rename_character(CFG.storyboard_path, trigger_id, new_trigger_id)
-        new_trigger_id = new_trigger_id.strip()
         character = store.get_character(CFG.storyboard_path, new_trigger_id)
         return (gr.update(choices=character_choices(), value=new_trigger_id), new_trigger_id,
                 character.get("display_name") or "", character.get("working_note") or "", "",
@@ -696,6 +709,21 @@ body, .gradio-container {
 .character-manager input::placeholder, .character-manager textarea::placeholder {
     color: #F5F1E8 !important;
 }
+.trigger-preview {
+    background: #E9D2AB;
+    border-left: 4px solid var(--signal-amber);
+    border-radius: 6px;
+    color: var(--horizon-navy);
+    font-weight: 600;
+    margin: 4px 0 10px;
+    padding: 8px 10px;
+}
+.trigger-preview code {
+    background: var(--storm-slate);
+    border-radius: 4px;
+    color: #FFFFFF;
+    padding: 2px 5px;
+}
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
@@ -934,25 +962,28 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         with gr.Group(elem_classes=["step-card", "step-1"]):
             gr.Markdown("#### Step 1 — Character identity and visual references")
             with gr.Group(elem_classes=["character-manager"]) as character_manager:
-                gr.Markdown("**Your character trigger is permanent production identity.** Use the same `CHAR:name` trigger in prompts, records, and future LoRA work.")
-                character_select = gr.Dropdown(label="Existing character trigger", choices=character_choices(), value=None,
-                                               info="Choose a locked identity, or create one below.")
+                gr.Markdown("**Create a Character**")
+                gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHAR:`.")
                 with gr.Row():
-                    new_trigger = gr.Textbox(label="New trigger", placeholder="e.g. CHAR:alistair_pig")
-                    new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Alistair the Pig")
+                    new_trigger = gr.Textbox(label="Character name for the trigger", placeholder="e.g. wilbur_the_pig")
+                    new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Wilbur the Pig")
+                trigger_preview = gr.HTML(character_trigger_preview(""))
                 new_working_note = gr.Textbox(label="Working continuity note", lines=2,
-                                               placeholder="e.g. practical country gentleman; tweed cap, waistcoat, calm and capable")
-                create_character_btn = gr.Button("Create and lock character identity", variant="primary")
+                                               placeholder="e.g. practical Victorian country gentleman; tweed cap, waistcoat, calm and capable")
+                create_character_btn = gr.Button("Create and lock character", variant="primary")
                 character_status = gr.Markdown("")
+                gr.Markdown("---\n**Choose or manage an existing Character**")
+                character_select = gr.Dropdown(label="Existing Character", choices=character_choices(), value=None,
+                                               info="Select a character after it has been created.")
                 with gr.Row():
                     character_display_name = gr.Textbox(label="Selected display name")
                     character_working_note = gr.Textbox(label="Selected continuity note", lines=2)
                 with gr.Row():
                     save_character_btn = gr.Button("Save character details")
-                    rename_trigger = gr.Textbox(label="Rename trigger", placeholder="e.g. CHAR:alistair_pig")
-                    rename_character_btn = gr.Button("Rename trigger")
-                delete_confirmation = gr.Checkbox(label="I understand deletion removes this character's registry records, concepts, panels, and references. Image files are kept.")
-                delete_character_btn = gr.Button("Delete character records", variant="stop")
+                    rename_trigger = gr.Textbox(label="New character name for the trigger", placeholder="e.g. wilbur_the_pig")
+                    rename_character_btn = gr.Button("Rename character trigger")
+                delete_confirmation = gr.Checkbox(label="I understand deletion removes this Character's registry records, concepts, panels, and references. Image files are kept.")
+                delete_character_btn = gr.Button("Delete Character records", variant="stop")
             entry_id = gr.Textbox(visible=False)
             with gr.Group(visible=False) as generic_identity_group:
                 generic_entry_id = gr.Textbox(label="Name", placeholder="e.g. MASTER:farm_field or 1.1")
@@ -1061,6 +1092,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                                 outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
             refresh_references, inputs=entry_id, outputs=ref_gallery).then(
             concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+        new_trigger.change(character_trigger_preview, inputs=new_trigger, outputs=trigger_preview)
         create_character_btn.click(create_character_ui, inputs=[new_trigger, new_display_name, new_working_note],
                                    outputs=[character_select, entry_id, character_display_name, character_working_note,
                                             new_trigger, new_display_name, new_working_note, character_status])
