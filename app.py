@@ -395,6 +395,26 @@ def sheets_gallery_refresh():
     return items
 
 
+def beats_table_refresh():
+    rows = store.list_beats(CFG.storyboard_path)
+    return [[r.get("order"), r.get("beat"), r.get("start_s"), r.get("end_s"),
+             r.get("duration_s"), r.get("source"), r.get("notes")] for r in rows]
+
+
+def import_beats_ui(beats_file):
+    if beats_file is None:
+        return "⚠️ Choose a beats JSON file first.", beats_table_refresh()
+    try:
+        with open(beats_file.name, "r", encoding="utf-8") as f:
+            beats = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return f"⚠️ Couldn't read that file: {e}", beats_table_refresh()
+    source = beats[0].get("source", "imported") if beats and isinstance(beats[0], dict) else "imported"
+    store.set_beats(CFG.storyboard_path, beats, source)
+    total = sum(b.get("duration_s", 0) for b in beats)
+    return f"✅ Imported {len(beats)} beats, total {total:.1f}s.", beats_table_refresh()
+
+
 # ---------------------------------------------------------------------------
 # Per-field "❓ More info" helper
 # ---------------------------------------------------------------------------
@@ -803,6 +823,24 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         sheets_gallery = gr.Gallery(label="Rendered composite sheets", columns=3, height=300)
         sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery)
         demo.load(sheets_gallery_refresh, outputs=sheets_gallery)
+
+        gr.Markdown(
+            "#### ⏱️ Beat timing\n"
+            "Import a beats JSON (either the word-count first-pass estimate, or "
+            "real word-level timing from a forced-alignment run against the "
+            "narration audio) — this replaces whatever was there before, since "
+            "beat timing is recomputed as a whole rather than edited beat by beat."
+        )
+        with gr.Row():
+            beats_file = gr.File(label="Beats JSON", file_types=[".json"])
+            beats_import_btn = gr.Button("Import")
+        beats_status = gr.Markdown("")
+        beats_table = gr.Dataframe(
+            headers=["#", "Beat", "Start (s)", "End (s)", "Duration (s)", "Source", "Notes"],
+            interactive=False,
+        )
+        beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table])
+        demo.load(beats_table_refresh, outputs=beats_table)
 
 
 if __name__ == "__main__":

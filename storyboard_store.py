@@ -55,6 +55,9 @@ PANELS_COLUMNS = [
 REFERENCES_SHEET = "References"
 REFERENCES_COLUMNS = ["entry_id", "image_path", "note", "added_at"]
 
+BEATS_SHEET = "Beats"
+BEATS_COLUMNS = ["order", "beat", "start_s", "end_s", "duration_s", "source", "notes"]
+
 
 # ---------------------------------------------------------------------------
 # Generic sheet plumbing (shared by Assets / Panels / References)
@@ -301,4 +304,35 @@ def add_reference(path: str, entry_id: str, image_path: str, note: str) -> None:
     ws.cell(row, _col_index(ws, "image_path"), image_path)
     ws.cell(row, _col_index(ws, "note"), note)
     ws.cell(row, _col_index(ws, "added_at"), _timestamp())
+    wb.save(path)
+
+
+# ---------------------------------------------------------------------------
+# Beats sheet (the Runtime Check equivalent — beat-level timing against the
+# actual narration audio, not per-shot durations)
+# ---------------------------------------------------------------------------
+
+def list_beats(path: str) -> list:
+    rows = _read_sheet_rows(path, BEATS_SHEET, BEATS_COLUMNS)
+    return sorted(rows, key=lambda r: (r.get("order") if r.get("order") is not None else 0))
+
+
+def set_beats(path: str, beats: list, source: str) -> None:
+    """Wholesale replace — beat timings are recomputed as a whole each time
+    (from a word-count estimate, or from a real forced-alignment run), not
+    edited row by row like Assets/Panels. Each item in `beats` needs:
+    beat, start_s, end_s, duration_s (order is assigned by list position)."""
+    wb = _open_or_create_workbook(path)
+    if BEATS_SHEET in wb.sheetnames:
+        wb.remove(wb[BEATS_SHEET])
+    ws = _ensure_sheet(wb, BEATS_SHEET, BEATS_COLUMNS)
+    for i, b in enumerate(beats, start=1):
+        row = i + 1
+        ws.cell(row, _col_index(ws, "order"), i)
+        ws.cell(row, _col_index(ws, "beat"), b.get("beat"))
+        ws.cell(row, _col_index(ws, "start_s"), round(b.get("start_s", 0), 2))
+        ws.cell(row, _col_index(ws, "end_s"), round(b.get("end_s", 0), 2))
+        ws.cell(row, _col_index(ws, "duration_s"), round(b.get("duration_s", 0), 2))
+        ws.cell(row, _col_index(ws, "source"), source)
+        ws.cell(row, _col_index(ws, "notes"), b.get("notes", ""))
     wb.save(path)

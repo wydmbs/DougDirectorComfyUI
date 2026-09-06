@@ -1,3 +1,8 @@
 gradio>=4.44
 openpyxl>=3.1
 Pillow>=10.0
+
+# openai-whisper is NOT needed to run app.py — it's only for
+# align_narration.py, which is meant to run on TheBeast (needs real
+# internet access + disk space for the model), not in this app's
+# environment. Install it separately there: pip install openai-whisper

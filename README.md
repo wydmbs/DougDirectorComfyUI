@@ -17,14 +17,25 @@ backdrops, shot keyframes):
   `/history`, fetch images via `/view`). Assumes nothing about your specific
   node graph.
 - `storyboard_store.py` — reads/writes an `.xlsx` asset registry across
-  three sheets: **Assets** (one row per entry, schema generalized from
+  four sheets: **Assets** (one row per entry, schema generalized from
   `Pig_and_Rooster_Storyboard_v14.xlsx`'s Shot List tab), **Panels** (one
-  row per panel of a character/backdrop sheet — see below), and
-  **References** (mood-board images attached before a design locks).
-  Entries are keyed by one `entry_id` convention (`shot_id`, `CHAR:name`,
-  `MASTER:name`, `PROP:name`). Locking an entry (or panel) a second time
-  updates the row in place and appends to its note log rather than
-  duplicating rows.
+  row per panel of a character/backdrop/prop sheet — see below),
+  **References** (mood-board images attached before a design locks), and
+  **Beats** (beat-level timing against the actual narration audio — the
+  Runtime Check equivalent, replaced wholesale each time rather than
+  edited row by row, since it's recomputed as a whole from either a
+  word-count estimate or a real forced-alignment run). Entries are keyed
+  by one `entry_id` convention (`shot_id`, `CHAR:name`, `MASTER:name`,
+  `PROP:name`). Locking an entry (or panel) a second time updates the row
+  in place and appends to its note log rather than duplicating rows.
+- `align_narration.py` — word-level forced alignment of the narration
+  audio against the poem's beat markers, producing a `beats.json` the
+  Registry tab's Import button reads directly. **Run this on TheBeast, not
+  in a cloud coding session** — Whisper's model weights are hosted on
+  domains a cloud session's network typically can't reach, and the model
+  file (1-3GB+) may not fit a cloud session's disk quota either. One-time,
+  ~5 minute run: `pip install openai-whisper && python align_narration.py
+  your_audio.wav`.
 - `sheet_composer.py` — renders a composite reference sheet for `CHAR:`,
   `MASTER:`, and `PROP:` entries from individually-generated panels,
   against a **fixed** panel template per entry_type. `CHAR` sheets (18
