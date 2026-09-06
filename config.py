@@ -34,6 +34,7 @@ class ToolchainConfig:
     storyboard_path: str = "storyboard.xlsx"
     images_dir: str = "images"
     mock_mode: bool = True
+    harry_provider: str = "Claude"
 
     def to_dict(self):
         d = asdict(self)
@@ -49,6 +50,7 @@ class ToolchainConfig:
             storyboard_path=d.get("storyboard_path", "storyboard.xlsx"),
             images_dir=d.get("images_dir", "images"),
             mock_mode=d.get("mock_mode", True),
+            harry_provider=d.get("harry_provider", "Claude"),
         )
         return cfg
 

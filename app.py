@@ -31,6 +31,7 @@ from PIL import Image, ImageDraw
 import config as cfgmod
 import storyboard_store as store
 import sheet_composer as composer
+import harry_advisor as harry
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 CFG = cfgmod.load_config()
@@ -66,7 +67,7 @@ def _save_image(img: Image.Image, label: str, seed: int) -> str:
 # ---------------------------------------------------------------------------
 
 def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
-                seed_node, seed_input, storyboard_path, mock_mode):
+                seed_node, seed_input, storyboard_path, mock_mode, harry_provider):
     global CFG
     workflow_path = CFG.workflow_json_path
     if workflow_file is not None:
@@ -87,6 +88,7 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         storyboard_path=storyboard_path.strip() or "storyboard.xlsx",
         images_dir=CFG.images_dir,
         mock_mode=bool(mock_mode),
+        harry_provider=harry_provider,
     )
     cfgmod.save_config(CFG)
     mode_msg = (
@@ -96,6 +98,58 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         f"{CFG.comfyui_url}."
     )
     return mode_msg
+
+
+# ---------------------------------------------------------------------------
+# Harry the Advisor
+# ---------------------------------------------------------------------------
+
+def harry_provider_status(provider):
+    return harry.provider_status(provider)
+
+
+def harry_save_source(title, source_text, audio_file):
+    try:
+        metadata = harry.save_source(title, source_text, audio_file.name if audio_file else None)
+        return metadata["source_id"], f"Saved source to Harry's project library: {metadata['source_id']}."
+    except Exception as error:
+        return "", f"⚠️ {error}"
+
+
+def harry_transcribe(audio_file):
+    try:
+        return harry.transcribe_audio(audio_file.name if audio_file else None), "Transcription complete. Review it, then ask Harry for recommendations."
+    except harry.HarryError as error:
+        return gr.update(), f"⚠️ {error}"
+
+
+def harry_analyze(provider, title, source_text, source_id, audio_file):
+    try:
+        plan = harry.analyze(provider, title, source_text, source_id, audio_file.name if audio_file else None)
+        return plan, plan["summary"], "\n".join(f"• {question}" for question in plan["questions"]) or "Harry has no essential questions.", harry.plan_to_rows(plan), plan.get("source_path", ""), f"Harry recommended {len(plan['items'])} editable draft artifacts."
+    except harry.HarryError as error:
+        return {}, "", "", [], f"⚠️ {error}"
+
+
+def harry_apply_drafts(rows, plan):
+    approved = harry.rows_to_plan(rows, plan)
+    harry.save_presets(approved)
+    return (gr.update(choices=harry.preset_choices(), value=None),
+            gr.update(choices=harry.checklist_choices(), value=[]),
+            f"Applied {len(approved['items'])} approved drafts to Build. They are presets only; nothing is locked.")
+
+
+def apply_build_preset(index):
+    if index is None:
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    items = harry.load_presets()
+    try:
+        item = items[int(index)]
+    except (IndexError, ValueError, TypeError):
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+    return (gr.update(value=item.get("kind", "CHAR")), item.get("suggested_id", ""),
+            item.get("description", ""), item.get("positive_prompt", ""), item.get("negative_prompt", ""),
+            item.get("beat", ""), item.get("reused_from", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -573,8 +627,8 @@ THEME = gr.themes.Soft(
     input_background_fill="#F5F1E8",
     input_border_color="#61717B",
     input_border_color_focus="#E99322",
-    button_primary_background_fill="#E99322",
-    button_primary_background_fill_hover="#9C4300",
+    button_primary_background_fill="#E8AE72",
+    button_primary_background_fill_hover="#9A5735",
     button_primary_text_color="#172534",
     button_primary_text_color_hover="#F5F1E8",
     button_secondary_background_fill="#F5F1E8",
@@ -592,8 +646,8 @@ CUSTOM_CSS = """
     --sea-mist: #DCE2DF;
     --cloud-linen: #F5F1E8;
     --sunlit-sand: #E9D2AB;
-    --signal-amber: #E99322;
-    --horizon-orange: #9C4300;
+    --signal-amber: #E8AE72;
+    --horizon-orange: #9A5735;
     --sunbeam-gold: #F6BE45;
     --ember: #B8462C;
     --sea-glass: #3E7B68;
@@ -630,7 +684,7 @@ body, .gradio-container {
     box-shadow: 0 4px 12px rgb(23 37 52 / 8%);
 }
 .step-1 { border-left-color: var(--weathered-blue-gray); }
-.step-2 { border-left-color: #B9824A; }
+.step-2 { border-left-color: #C98D68; }
 .step-3 { border-left-color: var(--signal-amber); }
 .step-4 { border-left-color: var(--sunbeam-gold); }
 .step-5 { border-left-color: var(--sea-glass); }
@@ -963,12 +1017,17 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 label="Where should locked images be recorded?",
                 value=CFG.storyboard_path, info="A spreadsheet file, created automatically.",
             )
+            gr.Markdown("#### Harry the Advisor provider")
+            harry_provider = gr.Dropdown(label="Advisor model provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider,
+                                         info="Claude is the default. Azure OpenAI reuses the local OpenScout Azure configuration and its environment key.")
+            harry_provider_note = gr.Markdown(harry.provider_status(CFG.harry_provider))
+            harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
 
         setup_status = gr.Markdown("")
         gr.Button("Save Setup", variant="primary").click(
             setup_save,
             inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
-                    seed_node, seed_input, storyboard_path, mock_mode],
+                    seed_node, seed_input, storyboard_path, mock_mode, harry_provider],
             outputs=setup_status,
         )
 
@@ -978,6 +1037,11 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             "permanently until you hit **Lock**."
         )
         build_context_banner = gr.HTML(build_context("CHAR"))
+        with gr.Group(elem_classes=["step-card", "step-1"]):
+            build_preset = gr.Dropdown(label="Start from a Harry-approved draft (optional)", choices=harry.preset_choices(), value=None,
+                                       info="This fills Build fields from an approved draft. It does not create or lock an asset.")
+            build_checklist = gr.CheckboxGroup(label="Harry prep checklist", choices=harry.checklist_choices(), value=[],
+                                                info="Tick artifacts as you complete them. This is a working checklist; locking remains the permanent record.")
 
         with gr.Group(elem_classes=["step-card", "step-1"]):
             gr.Markdown("#### Step 1 — Choose what you are building")
@@ -1109,6 +1173,8 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         # --- Wiring for entry_type / stage / panel context awareness ---
         entry_type.change(on_entry_type_change, inputs=entry_type,
                            outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner, generic_entry_id])
+        build_preset.change(apply_build_preset, inputs=build_preset,
+                            outputs=[entry_type, entry_id, description, prompt_positive, prompt_negative, beat, reused_from])
         character_select.change(select_character_ui, inputs=character_select,
                                 outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
             refresh_references, inputs=entry_id, outputs=ref_gallery).then(
@@ -1139,6 +1205,39 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         entry_id.change(refresh_references, inputs=entry_id, outputs=ref_gallery)
         entry_id.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
         entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+
+    with gr.Tab("🧭 Harry the Advisor"):
+        gr.Markdown("## Harry the Advisor\nStart with the script, story, poem, or narration. Harry proposes the production prep list; you edit and approve it before it becomes Build presets.")
+        with gr.Group(elem_classes=["step-card", "step-1"]):
+            harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
+            harry_source = gr.Textbox(label="Paste script, story, poem, or narration text", lines=14, placeholder="Paste the written source here. If you only have audio, upload it below and transcribe locally.")
+            harry_audio = gr.File(label="Optional narration/audio", file_types=["audio"])
+            with gr.Row():
+                harry_save_btn = gr.Button("Save source to project library")
+                harry_transcribe_btn = gr.Button("Transcribe audio locally")
+            harry_source_id = gr.State("")
+            harry_source_status = gr.Markdown("")
+        with gr.Group(elem_classes=["step-card", "step-2"]):
+            gr.Markdown("#### Let Harry recommend the preparation list")
+            harry_provider_run = gr.Dropdown(label="Provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider)
+            harry_privacy = gr.Markdown(harry.provider_status(CFG.harry_provider))
+            harry_provider_run.change(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
+            harry_run_btn = gr.Button("Ask Harry for recommendations", variant="primary")
+            harry_status = gr.Markdown("")
+            harry_summary = gr.Textbox(label="Harry's production reading", lines=4, interactive=False)
+            harry_questions = gr.Textbox(label="Only if essential: Harry's clarification questions", lines=3, interactive=False)
+        with gr.Group(elem_classes=["step-card", "step-3"]):
+            gr.Markdown("#### Review, refine, and approve drafts\nUntick anything you do not want. Every field is editable. Applying creates Build presets only; it does not lock assets.")
+            harry_plan = gr.State({})
+            harry_table = gr.Dataframe(headers=["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note", "Positive prompt", "Negative prompt", "Beat", "Chained from"],
+                                      datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
+            harry_apply_btn = gr.Button("Apply approved drafts to Build", variant="primary")
+            harry_apply_status = gr.Markdown("")
+        harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
+        harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
+        harry_run_btn.click(harry_analyze, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio],
+                            outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_status])
+        harry_apply_btn.click(harry_apply_drafts, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
 
     with gr.Tab("📋 Registry"):
         gr.Markdown(

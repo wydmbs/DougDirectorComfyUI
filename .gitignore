@@ -5,3 +5,5 @@ images/
 *.pyc
 __pycache__/
 .venv/
+
+harry_library/

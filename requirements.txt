@@ -1,6 +1,7 @@
 gradio>=4.44
 openpyxl>=3.1
 Pillow>=10.0
+PyYAML>=6.0
 
 # openai-whisper is NOT needed to run app.py — it's only for
 # align_narration.py, which is meant to run on TheBeast (needs real
