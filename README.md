@@ -36,17 +36,27 @@ backdrops, shot keyframes):
 
 ### Building a character or backdrop sheet
 
-Pick `CHAR:` or `MASTER:` as the entry type in the Build tab, and the form
-switches into panel mode: a dropdown lets you pick which panel of the fixed
-template you're working on (e.g. "front view", "angry expression"), each
-panel gets its own generate → pick → lock cycle, and switching between
-panels reloads whatever was last locked for that exact panel instead of
-starting blank. A "Reference images" mood-board section lets you attach
-downloaded/inspiration images with a note before you've settled on a
-design. Once enough panels are locked, "Render preview" assembles them into
-one composite sheet image (unfinished panels show as a placeholder, so you
-can preview progress at any point) — "Save as this entry's reference sheet"
-records that composite as the entry's canonical image in the registry.
+Pick `CHAR:` or `MASTER:` as the entry type in the Build tab. It's a
+two-stage flow:
+
+1. **Concept (mashup)** — explore freely using downloaded reference images
+   (attached via the mood-board section) plus text as inspiration, generate
+   variants, and lock the one design that becomes *the* character or
+   backdrop. This reuses the same Assets row a plain shot would.
+2. **Sheet panel** — once a concept is locked, switch stages and build each
+   panel of the fixed template (front/back/expressions/etc for characters;
+   day/night/weather/etc for backdrops) one at a time. A new panel's prompt
+   starts pre-filled from the locked concept's description rather than
+   blank, so every pose stays tight to the same design instead of
+   reinterpreting it. Switching between panels reloads whatever was last
+   locked for that exact panel.
+
+"Render preview" assembles the locked panels into one composite sheet
+image, with a small thumbnail of the locked concept in the header
+documenting what the panels were built to match. Unfinished panels show as
+a placeholder, so you can preview progress at any point. "Save as this
+entry's reference sheet" records that composite as the entry's canonical
+image in the registry.
 
 ### Quickstart
 

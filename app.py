@@ -149,16 +149,27 @@ def _generate(label, prompt_positive, prompt_negative, base_seed, n_variants):
     return gallery, status
 
 
-def generate_click(entry_id, entry_type, panel_key, prompt_positive, prompt_negative, base_seed, n_variants):
+CONCEPT_STAGE = "Concept (mashup)"
+PANEL_STAGE = "Sheet panel"
+
+
+def generate_click(entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
+                    base_seed, n_variants):
     if not entry_id:
         return [], "⚠️ Give this a name first (Step 1) — try 'CHAR:pig' or '1.1'."
-    if entry_type in SHEET_TYPES and not panel_key:
+    if entry_type in SHEET_TYPES and build_stage == PANEL_STAGE and not panel_key:
         return [], "⚠️ Pick which panel of the sheet you're building first."
-    label = entry_id if entry_type not in SHEET_TYPES else f"{entry_id}__{panel_key}"
+
+    if entry_type not in SHEET_TYPES:
+        label = entry_id
+    elif build_stage == CONCEPT_STAGE:
+        label = f"{entry_id}__concept"
+    else:
+        label = f"{entry_id}__{panel_key}"
     return _generate(label, prompt_positive, prompt_negative, base_seed, n_variants)
 
 
-def lock_click(entry_id, entry_type, panel_key, beat, description, prompt_positive,
+def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, prompt_positive,
                 prompt_negative, winner_path, winner_seed, note):
     if not entry_id:
         return "⚠️ Give this a name first (Step 1)."
@@ -182,6 +193,27 @@ def lock_click(entry_id, entry_type, panel_key, beat, description, prompt_positi
         )
         return f"🔒 Locked '{entry_id}' with seed {winner_seed}. Check the Registry tab."
 
+    if build_stage == CONCEPT_STAGE:
+        # Phase 1 — the mashup/concept design. Uses the same Assets row a
+        # plain SHOT would, so this reuses lock_entry() exactly.
+        store.lock_entry(
+            path=CFG.storyboard_path,
+            entry_id=entry_id.strip(),
+            entry_type=entry_type,
+            beat=beat.strip(),
+            description=description.strip(),
+            prompt_positive=prompt_positive.strip(),
+            prompt_negative_add=prompt_negative.strip(),
+            model="mock" if CFG.mock_mode else os.path.basename(CFG.workflow_json_path or ""),
+            seed=winner_seed,
+            reused_from="",
+            image_path=winner_path,
+            note=note.strip(),
+        )
+        return (f"🔒 Locked the concept design for '{entry_id}'. Switch to **Sheet panel** below "
+                "to start building poses/expressions — each one will start from this design.")
+
+    # Phase 2 — an individual panel of the fixed sheet template.
     if not panel_key:
         return "⚠️ Pick which panel of the sheet you're building first."
     store.lock_panel(
@@ -205,8 +237,9 @@ def lock_click(entry_id, entry_type, panel_key, beat, description, prompt_positi
 # ---------------------------------------------------------------------------
 
 def on_entry_type_change(entry_type):
-    """Show the panel picker + reference/sheet sections only for CHAR/MASTER;
-    populate the panel dropdown from that type's fixed template."""
+    """Show the two-stage panel section only for CHAR/MASTER; populate the
+    panel dropdown from that type's fixed template and reset to the
+    Concept stage, since that's always where a new entry starts."""
     if entry_type in SHEET_TYPES:
         template = composer.get_template(entry_type)
         choices = [p["key"] for p in template]
@@ -214,27 +247,73 @@ def on_entry_type_change(entry_type):
             gr.update(visible=True),
             gr.update(choices=choices, value=choices[0] if choices else None),
             gr.update(visible=True),
+            gr.update(value=CONCEPT_STAGE),
         )
-    return gr.update(visible=False), gr.update(choices=[], value=None), gr.update(visible=False)
+    return (gr.update(visible=False), gr.update(choices=[], value=None),
+            gr.update(visible=False), gr.update())
 
 
-def load_panel_context(entry_id, entry_type, panel_key):
-    """Whenever the name or the selected panel changes, show what's already
-    known instead of a blank form — this is the point of the whole feature:
-    the form should reflect what exists, not assume you remember it."""
-    if entry_type not in SHEET_TYPES or not entry_id or not panel_key:
+def on_build_stage_change(build_stage):
+    """The panel picker only matters in Sheet-panel mode."""
+    return gr.update(visible=(build_stage == PANEL_STAGE))
+
+
+def load_panel_context(entry_id, entry_type, build_stage, panel_key):
+    """Whenever the name, stage, or selected panel changes, show what's
+    already known instead of a blank form.
+
+    Concept stage: prefill from the entry's own locked concept (Assets row).
+    Sheet-panel stage: prefill from that exact panel's last lock if one
+    exists; otherwise fall back to the locked concept's description as a
+    starting point, since a fresh panel should extend the concept, not
+    reinvent it — that's the whole point of doing Phase 1 first."""
+    if entry_type not in SHEET_TYPES or not entry_id:
+        return gr.update(), gr.update(), ""
+
+    if build_stage == CONCEPT_STAGE:
+        entry = store.get_entry(CFG.storyboard_path, entry_id)
+        if not entry or not entry.get("image_path"):
+            return "", "", ("No concept locked yet for this name — describe the character/backdrop "
+                             "using your reference images as a guide, then generate and lock one.")
+        return (
+            entry.get("prompt_positive") or "",
+            entry.get("prompt_negative_add") or "",
+            f"📄 Loaded the locked concept (seed {entry.get('seed')}). Generate more variants to "
+            "refine it further, or move to **Sheet panel** below to start building poses.",
+        )
+
+    # Sheet-panel stage
+    if not panel_key:
         return gr.update(), gr.update(), ""
     panels = store.list_panels(CFG.storyboard_path, entry_id)
     match = next((p for p in panels if p.get("panel_key") == panel_key), None)
-    if not match:
-        return "", "", f"No existing prompt for **{panel_key}** yet — describe it fresh below."
-    last_note = (match.get("notes") or "").strip().splitlines()[-1] if match.get("notes") else ""
-    return (
-        match.get("prompt_positive") or "",
-        match.get("prompt_negative_add") or "",
-        f"📄 Loaded the last locked prompt for **{panel_key}** (seed {match.get('seed')}). "
-        f"{last_note} — edit and regenerate, or lock as-is.",
-    )
+    if match:
+        last_note = (match.get("notes") or "").strip().splitlines()[-1] if match.get("notes") else ""
+        return (
+            match.get("prompt_positive") or "",
+            match.get("prompt_negative_add") or "",
+            f"📄 Loaded the last locked prompt for **{panel_key}** (seed {match.get('seed')}). "
+            f"{last_note} — edit and regenerate, or lock as-is.",
+        )
+
+    entry = store.get_entry(CFG.storyboard_path, entry_id)
+    if entry and entry.get("image_path"):
+        return (
+            entry.get("prompt_positive") or "",
+            entry.get("prompt_negative_add") or "",
+            f"📄 No **{panel_key}** panel yet — starting from your locked concept design. Keep the "
+            "outfit, colors, and silhouette the same; just change the pose or expression described.",
+        )
+    return "", "", (f"No **{panel_key}** panel yet, and no concept locked either. Consider locking "
+                     "a concept first (Concept stage above) so every panel starts from the same design.")
+
+
+def concept_thumb_refresh(entry_id, entry_type):
+    if entry_type not in SHEET_TYPES or not entry_id:
+        return None
+    entry = store.get_entry(CFG.storyboard_path, entry_id)
+    path = entry.get("image_path") if entry else None
+    return path if path and os.path.exists(path) else None
 
 
 # ---------------------------------------------------------------------------
@@ -273,11 +352,13 @@ def render_composite_preview(entry_id, entry_type):
     if entry_type not in SHEET_TYPES:
         return None, "⚠️ Composite sheets are only for CHAR/MASTER entries."
     panel_images = store.get_panel_images(CFG.storyboard_path, entry_id)
+    concept_entry = store.get_entry(CFG.storyboard_path, entry_id)
+    concept_path = concept_entry.get("image_path") if concept_entry else None
     safe_id = entry_id.strip().replace(":", "_")
     out_dir = os.path.join(CFG.images_dir, "sheets")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{safe_id}_sheet.png")
-    composer.render_sheet(entry_id, entry_type, panel_images, out_path)
+    composer.render_sheet(entry_id, entry_type, panel_images, out_path, concept_image_path=concept_path)
     template = composer.get_template(entry_type)
     filled = sum(1 for p in template if panel_images.get(p["key"]))
     return out_path, f"🖼️ Rendered preview — {filled}/{len(template)} panels filled in."
@@ -385,10 +466,12 @@ so you (or a teammate) can reuse or reproduce it later.
 This tool is that memory. For a single shot, it's: **generate a batch of
 options → pick your favorite → lock it in with a note about why.**
 
-For a **character or a recurring backdrop**, it's more than one image — it's
-a whole reference sheet (front view, expressions, day/night variants,
-etc.), built one panel at a time and assembled automatically into one
-composite image other generations can point to.
+For a **character or a recurring backdrop**, it's two stages. First,
+**Concept**: explore freely with reference images as inspiration, generate
+variants, and settle on the one design that's *the* character. Then,
+**Sheet panels**: build each pose/expression/variant of a fixed template,
+each one staying tight to that locked concept rather than reinventing it —
+assembled automatically into one composite reference sheet.
 
 ### The tabs, in the order you'll actually use them
 
@@ -579,14 +662,22 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             description = gr.Textbox(label="Short description (for your own reference)", lines=2,
                                       placeholder="e.g. 'the pig, front-facing, tweed cap'")
 
-            # --- CHAR / MASTER only: panel picker + reference mood board ---
+            # --- CHAR / MASTER only: two-stage build (concept, then panels) ---
             with gr.Group(visible=False) as panel_group:
                 gr.Markdown(
-                    "#### This is a sheet — build it one panel at a time\n"
-                    "Every character/backdrop uses the same fixed set of panels, so "
-                    "later tools can always find e.g. the front view in the same spot."
+                    "#### This is a sheet — built in two stages\n"
+                    "**Concept (mashup):** explore freely using your reference images as "
+                    "inspiration, then lock the one design that's *the* character or backdrop.\n\n"
+                    "**Sheet panel:** once a concept is locked, build each pose/expression/"
+                    "variant of the fixed template — every panel should stay tight to the "
+                    "locked concept's design, not reinterpret it."
                 )
-                panel_key = gr.Dropdown(label="Which panel are you building?", choices=[])
+                with gr.Row():
+                    build_stage = gr.Radio(label="Stage", choices=[CONCEPT_STAGE, PANEL_STAGE],
+                                            value=CONCEPT_STAGE, scale=2)
+                    concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1,
+                                              height=120)
+                panel_key = gr.Dropdown(label="Which panel are you building?", choices=[], visible=False)
                 panel_status = gr.Markdown("")
 
                 with gr.Accordion("📎 Reference images (mood board, optional)", open=False):
@@ -626,7 +717,8 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             gen_status = gr.Markdown("")
             gen_btn.click(
                 generate_click,
-                inputs=[entry_id, entry_type, panel_key, prompt_positive, prompt_negative, base_seed, n_variants],
+                inputs=[entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
+                        base_seed, n_variants],
                 outputs=[gallery, gen_status],
             )
 
@@ -650,10 +742,10 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             lock_status = gr.Markdown("")
             lock_btn.click(
                 lock_click,
-                inputs=[entry_id, entry_type, panel_key, beat, description, prompt_positive,
+                inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, prompt_positive,
                         prompt_negative, winner_path, winner_seed, note],
                 outputs=lock_status,
-            )
+            ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
         # --- CHAR / MASTER only: composite sheet rendering ---
         with gr.Group(visible=False, elem_classes=["step-card", "step-6"]) as composite_group:
@@ -676,14 +768,19 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             save_sheet_btn.click(save_composite_ui, inputs=[entry_id, entry_type, composite_image, sheet_note],
                                   outputs=save_sheet_status)
 
-        # --- Wiring for entry_type / panel context awareness ---
+        # --- Wiring for entry_type / stage / panel context awareness ---
         entry_type.change(on_entry_type_change, inputs=entry_type,
-                           outputs=[panel_group, panel_key, composite_group])
-        entry_id.change(load_panel_context, inputs=[entry_id, entry_type, panel_key],
+                           outputs=[panel_group, panel_key, composite_group, build_stage])
+        build_stage.change(on_build_stage_change, inputs=build_stage, outputs=panel_key)
+        entry_id.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
                          outputs=[prompt_positive, prompt_negative, panel_status])
-        panel_key.change(load_panel_context, inputs=[entry_id, entry_type, panel_key],
+        build_stage.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
+                            outputs=[prompt_positive, prompt_negative, panel_status])
+        panel_key.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
                           outputs=[prompt_positive, prompt_negative, panel_status])
         entry_id.change(refresh_references, inputs=entry_id, outputs=ref_gallery)
+        entry_id.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+        entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
     with gr.Tab("📋 Registry"):
         gr.Markdown(

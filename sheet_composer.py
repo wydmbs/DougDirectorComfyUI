@@ -81,10 +81,15 @@ def get_template(entry_type: str):
     return PANEL_TEMPLATES.get((entry_type or "").upper(), PANEL_TEMPLATES["CHAR"])
 
 
-def render_sheet(entry_id: str, entry_type: str, panel_images: dict, out_path: str) -> str:
+def render_sheet(entry_id: str, entry_type: str, panel_images: dict, out_path: str,
+                  concept_image_path: str = None) -> str:
     """panel_images: dict of panel_key -> image path. Missing or unreadable
     entries render as a soft placeholder rather than failing, so an
-    in-progress sheet can still be previewed."""
+    in-progress sheet can still be previewed.
+
+    concept_image_path: the locked Phase-1 "mashup" design this sheet's
+    panels are meant to extend. Drawn as a small thumbnail in the header so
+    the sheet visibly documents what the panels were built to match."""
     template = get_template(entry_type)
     cols = GRID_COLUMNS.get((entry_type or "").upper(), 4)
     rows = (len(template) + cols - 1) // cols
@@ -104,6 +109,18 @@ def render_sheet(entry_id: str, entry_type: str, panel_images: dict, out_path: s
     draw.text((PADDING, 14), entry_id, font=title_font, fill=HEADER_TEXT)
     filled = sum(1 for p in template if panel_images.get(p["key"]) and os.path.exists(panel_images[p["key"]]))
     draw.text((PADDING, 44), f"{filled} / {len(template)} panels", font=subtitle_font, fill=(220, 240, 235))
+
+    if concept_image_path and os.path.exists(concept_image_path):
+        try:
+            thumb_size = HEADER_H - 16
+            concept_thumb = Image.open(concept_image_path).convert("RGB")
+            concept_thumb.thumbnail((thumb_size, thumb_size))
+            tx = width - PADDING - thumb_size
+            ty = (HEADER_H - concept_thumb.height) // 2
+            canvas.paste(concept_thumb, (tx + (thumb_size - concept_thumb.width), ty))
+            draw.text((tx - 78, HEADER_H / 2 - 8), "concept:", font=subtitle_font, fill=(220, 240, 235))
+        except OSError:
+            pass
 
     for i, panel in enumerate(template):
         col = i % cols
