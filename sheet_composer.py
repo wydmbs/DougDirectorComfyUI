@@ -23,16 +23,25 @@ from PIL import Image, ImageDraw, ImageFont
 
 PANEL_TEMPLATES = {
     "CHAR": [
-        {"key": "front_view", "label": "Front"},
-        {"key": "back_view", "label": "Back"},
-        {"key": "profile_view", "label": "Profile"},
-        {"key": "attitude_pose", "label": "Attitude pose"},
+        # Full-body turnaround
+        {"key": "fullbody_front", "label": "Full body — front"},
+        {"key": "fullbody_back", "label": "Full body — back"},
+        {"key": "fullbody_left", "label": "Full body — left"},
+        {"key": "fullbody_right", "label": "Full body — right"},
+        # Upper-third (bust) turnaround
+        {"key": "bust_front", "label": "Upper third — front"},
+        {"key": "bust_back", "label": "Upper third — back"},
+        {"key": "bust_left", "label": "Upper third — left"},
+        {"key": "bust_right", "label": "Upper third — right"},
+        # Forward-facing emotion shots
         {"key": "expression_neutral", "label": "Neutral"},
         {"key": "expression_happy", "label": "Happy"},
         {"key": "expression_angry", "label": "Angry"},
         {"key": "expression_sad", "label": "Sad"},
         {"key": "expression_surprised", "label": "Surprised"},
         {"key": "expression_determined", "label": "Determined"},
+        # Supporting reference
+        {"key": "attitude_pose", "label": "Attitude pose"},
         {"key": "costume_closeup", "label": "Costume detail"},
         {"key": "signature_prop", "label": "Signature prop"},
         {"key": "color_palette", "label": "Color palette"},
@@ -46,7 +55,7 @@ PANEL_TEMPLATES = {
     ],
 }
 
-GRID_COLUMNS = {"CHAR": 5, "MASTER": 3}
+GRID_COLUMNS = {"CHAR": 4, "MASTER": 3}
 
 # ---------------------------------------------------------------------------
 # Layout constants

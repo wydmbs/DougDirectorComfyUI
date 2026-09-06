@@ -27,10 +27,14 @@ backdrops, shot keyframes):
   duplicating rows.
 - `sheet_composer.py` — renders a composite reference sheet for `CHAR:` and
   `MASTER:` entries from individually-generated panels, against a **fixed**
-  panel template per entry_type (front/back/profile/expression-grid/etc for
-  characters; day/night/weather/etc for backdrops). The template is fixed
-  on purpose — every character sheet has its panels in the same position,
-  so downstream motion/animation tooling can rely on that consistency.
+  panel template per entry_type. `CHAR` sheets (18 panels): a full-body
+  turnaround (front/back/left/right), an upper-third/bust turnaround
+  (front/back/left/right), six forward-facing emotion shots, and four
+  supporting panels (attitude pose, costume detail, signature prop, color
+  palette). `MASTER` sheets (5 panels): establishing wide, day, night,
+  weather variant, detail close-up. The template is fixed on purpose —
+  every character sheet has its panels in the same position, so downstream
+  motion/animation tooling can rely on that consistency.
 - `config.py` — one small persisted JSON config, shared/extended by future
   modules rather than each module inventing its own.
 
