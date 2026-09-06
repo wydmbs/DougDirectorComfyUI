@@ -798,6 +798,25 @@ body, .gradio-container {
     color: #FFFFFF;
     padding: 2px 5px;
 }
+.harry-intake {
+    background: #FFF9EA;
+    border: 1px solid var(--weathered-blue-gray);
+    border-left: 6px solid var(--signal-amber);
+    border-radius: 10px;
+    color: var(--horizon-navy);
+    line-height: 1.5;
+    margin: 8px 0 14px;
+    padding: 12px 14px;
+}
+.harry-source-option {
+    background: var(--cloud-linen) !important;
+    border: 1px solid #B8C1BE !important;
+    border-radius: 10px;
+    padding: 12px !important;
+}
+.harry-source-option p, .harry-source-option strong {
+    color: var(--horizon-navy) !important;
+}
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
@@ -1210,11 +1229,16 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         gr.Markdown("## Harry the Advisor\nStart with the script, story, poem, or narration. Harry proposes the production prep list; you edit and approve it before it becomes Build presets.")
         with gr.Group(elem_classes=["step-card", "step-1"]):
             harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
-            harry_source = gr.Textbox(label="Paste script, story, poem, or narration text", lines=14, placeholder="Paste the written source here. If you only have audio, upload it below and transcribe locally.")
-            harry_audio = gr.File(label="Optional narration/audio", file_types=["audio"])
+            gr.HTML('<div class="harry-intake"><strong>Choose your source:</strong> either <strong>Option A — paste the written script/text</strong>, or <strong>Option B — upload narration audio</strong> and transcribe it locally. You may provide both if the text needs checking against the audio.</div>')
             with gr.Row():
-                harry_save_btn = gr.Button("Save source to project library")
-                harry_transcribe_btn = gr.Button("Transcribe audio locally")
+                with gr.Group(elem_classes=["harry-source-option"]):
+                    gr.Markdown("**Option A — Paste text**\n\nPaste a script, story, poem, narration, or treatment. This is the fastest route.")
+                    harry_source = gr.Textbox(label="Written source text", lines=12, placeholder="Paste your script, story, poem, or narration here…")
+                with gr.Group(elem_classes=["harry-source-option"]):
+                    gr.Markdown("**Option B — Upload audio**\n\nUpload narration when no written text is available, then use Transcribe audio locally. Review the transcription before asking Harry.")
+                    harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
+                    harry_transcribe_btn = gr.Button("Transcribe audio locally")
+            harry_save_btn = gr.Button("Save current source to project library")
             harry_source_id = gr.State("")
             harry_source_status = gr.Markdown("")
         with gr.Group(elem_classes=["step-card", "step-2"]):
