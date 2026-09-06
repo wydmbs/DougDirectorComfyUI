@@ -1,0 +1,7 @@
+# Production data — not tool code
+toolchain_config.json
+storyboard.xlsx
+images/
+*.pyc
+__pycache__/
+.venv/
