@@ -237,10 +237,17 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
 # ---------------------------------------------------------------------------
 
 BUILD_CONTEXT = {
-    "CHAR": ("🦊", "Character sheet", "Build a reusable character design: lock a concept first, then make its 18 consistent pose, expression, costume, and palette panels."),
-    "MASTER": ("🏞️", "Backdrop sheet", "Build a recurring location: lock its concept, then define its establishing, day, night, weather, and detail views."),
-    "PROP": ("🧰", "Prop sheet", "Build a recurring object: lock its concept, then define its turnaround, surface, detail, scale, and material panels."),
-    "SHOT": ("🎬", "Single shot", "Build one scene keyframe. Generate options, select the strongest image, and lock it with its prompt and seed."),
+    "CHAR": ("🦊", "Character", "Build a reusable character design: lock a concept first, then make its 18 consistent pose, expression, costume, and palette panels."),
+    "MASTER": ("🏞️", "Backdrop", "Build a recurring location: lock its concept, then define its establishing, day, night, weather, and detail views."),
+    "PROP": ("🧰", "Prop", "Build a recurring object: lock its concept, then define its turnaround, surface, detail, scale, and material panels."),
+    "SHOT": ("🎬", "Shot", "Build one scene keyframe. Generate options, select the strongest image, and lock it with its prompt and seed."),
+}
+
+BUILD_TYPE_CHOICES = [("Character", "CHAR"), ("Backdrop", "MASTER"), ("Prop", "PROP"), ("Shot", "SHOT")]
+GENERIC_IDENTITY = {
+    "MASTER": ("Backdrop name", "e.g. MASTER:farm_field", "Use a stable backdrop ID for this recurring place."),
+    "PROP": ("Prop name", "e.g. PROP:crate", "Use a stable prop ID for this recurring object."),
+    "SHOT": ("Shot number", "e.g. 1.1", "Use the storyboard shot number for this one-off keyframe."),
 }
 
 
@@ -256,21 +263,34 @@ def build_context(entry_type):
 
 
 def on_entry_type_change(entry_type):
-    """Set the active workflow and explanatory banner for the selected build type."""
+    """Set the active workflow, identity form, and banner for the selected build type."""
+    generic_update = gr.update()
+    if entry_type != "CHAR":
+        label, placeholder, info = GENERIC_IDENTITY[entry_type]
+        generic_update = gr.update(label=label, placeholder=placeholder, info=info, value="")
+
     if entry_type in SHEET_TYPES:
         template = composer.get_template(entry_type)
         choices = [panel["key"] for panel in template]
         return (
-            gr.update(visible=True), gr.update(visible=False),
+            gr.update(visible=(entry_type == "CHAR")),
+            gr.update(visible=(entry_type != "CHAR")),
             gr.update(choices=choices, value=choices[0] if choices else None),
-            gr.update(visible=True), gr.update(value=CONCEPT_STAGE), build_context(entry_type),
+            gr.update(visible=True),
+            gr.update(value=CONCEPT_STAGE),
+            build_context(entry_type),
+            generic_update,
         )
+
     return (
-        gr.update(visible=False), gr.update(visible=True),
-        gr.update(choices=[], value=None), gr.update(visible=False), gr.update(), build_context(entry_type),
+        gr.update(visible=False),
+        gr.update(visible=True),
+        gr.update(choices=[], value=None),
+        gr.update(visible=False),
+        gr.update(),
+        build_context(entry_type),
+        generic_update,
     )
-
-
 
 def character_choices():
     return [(f"{row.get('display_name') or row['trigger_id']} — {row['trigger_id']}", row["trigger_id"])
@@ -960,7 +980,10 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         build_context_banner = gr.HTML(build_context("CHAR"))
 
         with gr.Group(elem_classes=["step-card", "step-1"]):
-            gr.Markdown("#### Step 1 — Character identity and visual references")
+            gr.Markdown("#### Step 1 — Choose what you are building")
+            entry_type = gr.Dropdown(label="What are you building?", choices=BUILD_TYPE_CHOICES, value="CHAR",
+                                     info="Choose this first. The identity, references, and workflow below change for Character, Backdrop, Prop, or Shot.")
+            gr.Markdown("#### Step 2 — Name it and add references")
             with gr.Group(elem_classes=["character-manager"]) as character_manager:
                 gr.Markdown("**Create a Character**")
                 gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHAR:`.")
@@ -986,11 +1009,9 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 delete_character_btn = gr.Button("Delete Character records", variant="stop")
             entry_id = gr.Textbox(visible=False)
             with gr.Group(visible=False) as generic_identity_group:
-                generic_entry_id = gr.Textbox(label="Name", placeholder="e.g. MASTER:farm_field or 1.1")
+                generic_entry_id = gr.Textbox(label="Backdrop name", placeholder="e.g. MASTER:farm_field",
+                                               info="Use a stable backdrop ID for this recurring place.")
                 generic_entry_id.change(lambda value: value, inputs=generic_entry_id, outputs=entry_id)
-                gr.Markdown("Use a stable ID: `MASTER:name`, `PROP:name`, or a shot number such as `1.1`.")
-            entry_type = gr.Dropdown(label="What are you building?", choices=["CHAR", "MASTER", "PROP", "SHOT"], value="CHAR",
-                                     info="Character is the default. Switching type changes the workflow and guidance above.")
             with gr.Row():
                 beat = gr.Textbox(label="Section / beat (optional)", placeholder="e.g. The Storm, or Beat 3")
                 reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHAR:alistair_pig, or MASTER:ship_deck")
@@ -1013,7 +1034,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     ref_gallery = gr.Gallery(label="Character reference board", columns=4, height=200)
 
         with gr.Group(elem_classes=["step-card", "step-2"]):
-            gr.Markdown("#### Step 2 — Prompt the image or video model")
+            gr.Markdown("#### Step 3 — Prompt the image or video model")
             prompt_positive = gr.Textbox(label="Positive prompt", lines=3,
                 placeholder="Describe subject, wardrobe, pose, composition, style, lighting, and continuity.")
             prompt_negative = gr.Textbox(label="Negative prompt (optional)", lines=2,
@@ -1087,7 +1108,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
         # --- Wiring for entry_type / stage / panel context awareness ---
         entry_type.change(on_entry_type_change, inputs=entry_type,
-                           outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner])
+                           outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner, generic_entry_id])
         character_select.change(select_character_ui, inputs=character_select,
                                 outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
             refresh_references, inputs=entry_id, outputs=ref_gallery).then(
