@@ -51,6 +51,8 @@ PANEL_TEMPLATES = {
         {"key": "turnaround_back", "label": "Back"},
         {"key": "turnaround_left", "label": "Left"},
         {"key": "turnaround_right", "label": "Right"},
+        {"key": "interior", "label": "Interior (if any)"},
+        {"key": "on_it", "label": "On it / surface (if any)"},
         {"key": "detail_closeup", "label": "Detail / texture"},
         {"key": "in_context", "label": "In context (scale)"},
         {"key": "material_palette", "label": "Material palette"},

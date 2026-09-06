@@ -32,10 +32,17 @@ backdrops, shot keyframes):
   bust turnaround (front/back/left/right), six forward-facing emotion
   shots, and four supporting panels (attitude pose, costume detail,
   signature prop, color palette). `MASTER` sheets (5 panels): establishing
-  wide, day, night, weather variant, detail close-up. `PROP` sheets (7
-  panels) — for recurring key objects like a ship, cart, farmhouse, or
-  crate: a turnaround (front/back/left/right), a detail/texture close-up,
-  an in-context shot for scale reference, and a material palette. The
+  wide, day, night, weather variant, detail close-up. `PROP` sheets (9 panels) — for recurring key objects like a ship, cart,
+  farmhouse, or crate: a turnaround (front/back/left/right), an interior
+  view and an on-it/surface view (present on every prop sheet, but simply
+  left unfilled for objects that don't have one — e.g. a solid decorative
+  prop with no interior), a detail/texture close-up, an in-context shot
+  for scale reference, and a material palette. This generalizes the old
+  storyboard's crate-framing grammar (INTERIOR/EXTERIOR/THROUGH-SLATS/N/A)
+  to any prop, not just the crate. Note: a scene-level interior like the
+  ship's cargo hold is a `MASTER:` backdrop, not part of the ship's `PROP:`
+  sheet — the interior/on-it panels are for the object's own surfaces, not
+  spaces large enough to be their own scene. The
   template is fixed on purpose — every sheet has its panels in the same
   position, so downstream motion/animation tooling can rely on that
   consistency.
