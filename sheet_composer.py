@@ -46,6 +46,15 @@ PANEL_TEMPLATES = {
         {"key": "signature_prop", "label": "Signature prop"},
         {"key": "color_palette", "label": "Color palette"},
     ],
+    "PROP": [
+        {"key": "turnaround_front", "label": "Front"},
+        {"key": "turnaround_back", "label": "Back"},
+        {"key": "turnaround_left", "label": "Left"},
+        {"key": "turnaround_right", "label": "Right"},
+        {"key": "detail_closeup", "label": "Detail / texture"},
+        {"key": "in_context", "label": "In context (scale)"},
+        {"key": "material_palette", "label": "Material palette"},
+    ],
     "MASTER": [
         {"key": "establishing_wide", "label": "Establishing (wide)"},
         {"key": "day", "label": "Day"},
@@ -55,7 +64,7 @@ PANEL_TEMPLATES = {
     ],
 }
 
-GRID_COLUMNS = {"CHAR": 4, "MASTER": 3}
+GRID_COLUMNS = {"CHAR": 4, "MASTER": 3, "PROP": 4}
 
 # ---------------------------------------------------------------------------
 # Layout constants

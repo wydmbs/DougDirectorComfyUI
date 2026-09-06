@@ -36,7 +36,7 @@ from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 CFG = cfgmod.load_config()
 os.makedirs(CFG.images_dir, exist_ok=True)
 
-SHEET_TYPES = ("CHAR", "MASTER")
+SHEET_TYPES = ("CHAR", "MASTER", "PROP")
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
             note=note.strip(),
         )
         return (f"🔒 Locked the concept design for '{entry_id}'. Switch to **Sheet panel** below "
-                "to start building poses/expressions — each one will start from this design.")
+                "to start building its panels — each one will start from this design.")
 
     # Phase 2 — an individual panel of the fixed sheet template.
     if not panel_key:
@@ -466,12 +466,13 @@ so you (or a teammate) can reuse or reproduce it later.
 This tool is that memory. For a single shot, it's: **generate a batch of
 options → pick your favorite → lock it in with a note about why.**
 
-For a **character or a recurring backdrop**, it's two stages. First,
-**Concept**: explore freely with reference images as inspiration, generate
-variants, and settle on the one design that's *the* character. Then,
-**Sheet panels**: build each pose/expression/variant of a fixed template,
-each one staying tight to that locked concept rather than reinventing it —
-assembled automatically into one composite reference sheet.
+For a **character, recurring backdrop, or key object/prop**, it's two
+stages. First, **Concept**: explore freely with reference images as
+inspiration, generate variants, and settle on the one design that's *the*
+character, backdrop, or artifact. Then, **Sheet panels**: build each pose,
+angle, or variant of a fixed template, each one staying tight to that
+locked concept rather than reinventing it — assembled automatically into
+one composite reference sheet.
 
 ### The tabs, in the order you'll actually use them
 
@@ -649,8 +650,9 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 entry_type = gr.Dropdown(label="Type", choices=["SHOT", "CHAR", "MASTER", "PROP"],
                                           value="SHOT", info="What kind of thing this is.")
             id_help = gr.Markdown(
-                "Use `CHAR:name` for a character (e.g. `CHAR:pig`) or `MASTER:name` "
-                "for a recurring backdrop (e.g. `MASTER:farm_field`) — both build a "
+                "Use `CHAR:name` for a character (e.g. `CHAR:pig`), `MASTER:name` "
+                "for a recurring backdrop (e.g. `MASTER:farm_field`), or `PROP:name` "
+                "for a recurring key object (e.g. `PROP:crate`) — all three build a "
                 "full reference sheet, panel by panel. Use a shot number (e.g. `1.1`) "
                 "for a single scene image. Reusing the same name updates that entry "
                 "instead of creating a new one.",

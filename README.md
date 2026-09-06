@@ -25,23 +25,27 @@ backdrops, shot keyframes):
   `MASTER:name`, `PROP:name`). Locking an entry (or panel) a second time
   updates the row in place and appends to its note log rather than
   duplicating rows.
-- `sheet_composer.py` — renders a composite reference sheet for `CHAR:` and
-  `MASTER:` entries from individually-generated panels, against a **fixed**
-  panel template per entry_type. `CHAR` sheets (18 panels): a full-body
-  turnaround (front/back/left/right), an upper-third/bust turnaround
-  (front/back/left/right), six forward-facing emotion shots, and four
-  supporting panels (attitude pose, costume detail, signature prop, color
-  palette). `MASTER` sheets (5 panels): establishing wide, day, night,
-  weather variant, detail close-up. The template is fixed on purpose —
-  every character sheet has its panels in the same position, so downstream
-  motion/animation tooling can rely on that consistency.
+- `sheet_composer.py` — renders a composite reference sheet for `CHAR:`,
+  `MASTER:`, and `PROP:` entries from individually-generated panels,
+  against a **fixed** panel template per entry_type. `CHAR` sheets (18
+  panels): a full-body turnaround (front/back/left/right), an upper-third/
+  bust turnaround (front/back/left/right), six forward-facing emotion
+  shots, and four supporting panels (attitude pose, costume detail,
+  signature prop, color palette). `MASTER` sheets (5 panels): establishing
+  wide, day, night, weather variant, detail close-up. `PROP` sheets (7
+  panels) — for recurring key objects like a ship, cart, farmhouse, or
+  crate: a turnaround (front/back/left/right), a detail/texture close-up,
+  an in-context shot for scale reference, and a material palette. The
+  template is fixed on purpose — every sheet has its panels in the same
+  position, so downstream motion/animation tooling can rely on that
+  consistency.
 - `config.py` — one small persisted JSON config, shared/extended by future
   modules rather than each module inventing its own.
 
-### Building a character or backdrop sheet
+### Building a character, backdrop, or prop sheet
 
-Pick `CHAR:` or `MASTER:` as the entry type in the Build tab. It's a
-two-stage flow:
+Pick `CHAR:`, `MASTER:`, or `PROP:` as the entry type in the Build tab.
+It's a two-stage flow:
 
 1. **Concept (mashup)** — explore freely using downloaded reference images
    (attached via the mood-board section) plus text as inspiration, generate
