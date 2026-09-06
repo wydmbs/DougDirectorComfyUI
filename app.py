@@ -613,10 +613,7 @@ body, .gradio-container {
 }
 .step-card h4 { margin-top: 0 !important; }
 .step-card label {
-    background: var(--horizon-orange);
-    color: #FFFFFF !important;
-    border-radius: 8px;
-    padding: 3px 7px;
+    color: var(--horizon-navy) !important;
     font-weight: 600;
 }
 .step-card input, .step-card textarea, .step-card select {
@@ -677,23 +674,28 @@ body, .gradio-container {
 }
 .character-manager .block, .character-manager .form, .character-manager .wrap,
 .character-manager .gr-box, .character-manager .gr-group, .character-manager fieldset {
-    background: transparent !important;
-    border: 0 !important;
+    background: var(--cloud-linen) !important;
+    border-color: #B8C1BE !important;
     box-shadow: none !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
 }
-.character-manager p, .character-manager strong, .character-manager span {
+.character-manager p, .character-manager strong, .character-manager span,
+.character-manager label, .character-manager legend {
     color: var(--horizon-navy) !important;
 }
-.character-manager > .prose {
-    margin: 0 0 10px !important;
-}
+.character-manager > .prose { margin: 0 0 10px !important; }
 .character-manager label {
-    background: var(--horizon-orange) !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    font-weight: 600;
+    padding: 0 !important;
+}
+.character-manager input, .character-manager textarea, .character-manager select {
+    background: #5A6C80 !important;
     color: #FFFFFF !important;
 }
-.character-manager .wrap { margin-top: 0 !important; }
+.character-manager input::placeholder, .character-manager textarea::placeholder {
+    color: #F5F1E8 !important;
+}
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
