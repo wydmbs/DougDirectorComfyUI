@@ -236,21 +236,44 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
 # Panel-template / context-aware form logic (CHAR / MASTER only)
 # ---------------------------------------------------------------------------
 
+BUILD_CONTEXT = {
+    "CHAR": ("🦊", "Character sheet", "Build a reusable character design: lock a concept first, then make its 18 consistent pose, expression, costume, and palette panels."),
+    "MASTER": ("🏞️", "Backdrop sheet", "Build a recurring location: lock its concept, then define its establishing, day, night, weather, and detail views."),
+    "PROP": ("🧰", "Prop sheet", "Build a recurring object: lock its concept, then define its turnaround, surface, detail, scale, and material panels."),
+    "SHOT": ("🎬", "Single shot", "Build one scene keyframe. Generate options, select the strongest image, and lock it with its prompt and seed."),
+}
+
+
+def build_context(entry_type):
+    icon, title, description = BUILD_CONTEXT.get(entry_type, BUILD_CONTEXT["CHAR"])
+    return (
+        f'<div class="build-context build-context-{entry_type.lower()}">'
+        f'<div class="build-context-icon" aria-hidden="true">{icon}</div>'
+        f'<div><div class="build-context-kicker">YOU ARE BUILDING</div>'
+        f'<div class="build-context-title">{title}</div>'
+        f'<div class="build-context-copy">{description}</div></div></div>'
+    )
+
+
 def on_entry_type_change(entry_type):
-    """Show the two-stage panel section only for CHAR/MASTER; populate the
-    panel dropdown from that type's fixed template and reset to the
-    Concept stage, since that's always where a new entry starts."""
+    """Set the active workflow and explanatory banner for the selected build type."""
     if entry_type in SHEET_TYPES:
         template = composer.get_template(entry_type)
-        choices = [p["key"] for p in template]
+        choices = [panel["key"] for panel in template]
         return (
             gr.update(visible=True),
             gr.update(choices=choices, value=choices[0] if choices else None),
             gr.update(visible=True),
             gr.update(value=CONCEPT_STAGE),
+            build_context(entry_type),
         )
-    return (gr.update(visible=False), gr.update(choices=[], value=None),
-            gr.update(visible=False), gr.update())
+    return (
+        gr.update(visible=False),
+        gr.update(choices=[], value=None),
+        gr.update(visible=False),
+        gr.update(),
+        build_context(entry_type),
+    )
 
 
 def on_build_stage_change(build_stage):
@@ -530,6 +553,36 @@ body, .gradio-container {
     color: #F5F1E8 !important;
 }
 .help-btn { max-width: 40px !important; }
+.build-context {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    background: var(--cloud-linen);
+    border: 1px solid var(--weathered-blue-gray);
+    border-left: 7px solid var(--signal-amber);
+    border-radius: 14px;
+    box-shadow: 0 4px 12px rgb(23 37 52 / 10%);
+    color: var(--horizon-navy);
+    margin: 8px 0 18px;
+    padding: 14px 18px;
+}
+.build-context-icon {
+    align-items: center;
+    background: var(--pale-gold);
+    border-radius: 50%;
+    display: flex;
+    flex: 0 0 52px;
+    font-size: 28px;
+    height: 52px;
+    justify-content: center;
+    width: 52px;
+}
+.build-context-kicker { color: var(--weathered-blue-gray); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; }
+.build-context-title { color: var(--horizon-navy); font-size: 1.3rem; font-weight: 700; line-height: 1.25; }
+.build-context-copy { color: var(--horizon-navy); line-height: 1.4; margin-top: 2px; }
+.build-context-master { border-left-color: var(--sea-glass); }
+.build-context-prop { border-left-color: #B9824A; }
+.build-context-shot { border-left-color: var(--horizon-orange); }
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
@@ -763,18 +816,19 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             "Work through the steps top to bottom. Nothing is saved "
             "permanently until you hit **Lock**."
         )
+        build_context_banner = gr.HTML(build_context("CHAR"))
 
         with gr.Group(elem_classes=["step-card", "step-1"]):
             gr.Markdown("#### Step 1 — Name what you're making")
             with gr.Row():
                 entry_id = gr.Textbox(
                     label="Name",
-                    placeholder="e.g. CHAR:pig, MASTER:farm_field, or a shot number like 1.1",
+                    placeholder="e.g. CHAR:pig",
                     scale=9,
                 )
                 id_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
-                entry_type = gr.Dropdown(label="Type", choices=["SHOT", "CHAR", "MASTER", "PROP"],
-                                          value="SHOT", info="What kind of thing this is.")
+                entry_type = gr.Dropdown(label="Type", choices=["CHAR", "MASTER", "PROP", "SHOT"],
+                                          value="CHAR", info="This changes the build workflow shown above.")
             id_help = gr.Markdown(
                 "Use `CHAR:name` for a character (e.g. `CHAR:pig`), `MASTER:name` "
                 "for a recurring backdrop (e.g. `MASTER:farm_field`), or `PROP:name` "
@@ -797,7 +851,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                                       placeholder="e.g. 'the pig, front-facing, tweed cap'")
 
             # --- CHAR / MASTER only: two-stage build (concept, then panels) ---
-            with gr.Group(visible=False) as panel_group:
+            with gr.Group(visible=True) as panel_group:
                 gr.Markdown(
                     "#### This is a sheet — built in two stages\n"
                     "**Concept (mashup):** explore freely using your reference images as "
@@ -811,7 +865,9 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                                             value=CONCEPT_STAGE, scale=2)
                     concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1,
                                               height=120)
-                panel_key = gr.Dropdown(label="Which panel are you building?", choices=[], visible=False)
+                panel_key = gr.Dropdown(label="Which panel are you building?",
+                                        choices=[panel["key"] for panel in composer.get_template("CHAR")],
+                                        value="fullbody_front", visible=False)
                 panel_status = gr.Markdown("")
 
                 with gr.Accordion("📎 Reference images (mood board, optional)", open=False):
@@ -882,7 +938,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
         # --- CHAR / MASTER only: composite sheet rendering ---
-        with gr.Group(visible=False, elem_classes=["step-card", "step-6"]) as composite_group:
+        with gr.Group(visible=True, elem_classes=["step-card", "step-6"]) as composite_group:
             gr.Markdown(
                 "#### Step 6 — Render the sheet\n"
                 "Puts every locked panel together into one composite reference image. "
@@ -904,7 +960,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
         # --- Wiring for entry_type / stage / panel context awareness ---
         entry_type.change(on_entry_type_change, inputs=entry_type,
-                           outputs=[panel_group, panel_key, composite_group, build_stage])
+                           outputs=[panel_group, panel_key, composite_group, build_stage, build_context_banner])
         build_stage.change(on_build_stage_change, inputs=build_stage, outputs=panel_key)
         entry_id.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
                          outputs=[prompt_positive, prompt_negative, panel_status])
