@@ -10,21 +10,43 @@ See `SUITE.md` for the standing design guardrails every module follows.
 The generate → review → lock loop for base images (character sheets,
 backdrops, shot keyframes):
 
-- `app.py` — Gradio shell, three tabs: **Setup** (point at ComfyUI + a
-  workflow exported via "Save (API Format)", map prompt/seed node IDs —
-  one-time, works with any workflow), **Build** (pick an `entry_id`, iterate
-  prompt/seed, generate N variants, pick a winner, lock it), **Registry**
-  (read-only view of everything locked).
+- `app.py` — Gradio shell with a Welcome tab, a Setup tab (point at ComfyUI
+  + a workflow exported via "Save (API Format)", map prompt/seed node IDs —
+  one-time, works with any workflow), a Build tab, and a Registry tab.
 - `comfy_client.py` — generic ComfyUI HTTP API client (queue a prompt, poll
   `/history`, fetch images via `/view`). Assumes nothing about your specific
   node graph.
-- `storyboard_store.py` — reads/writes an `.xlsx` asset registry. Schema
-  generalized from `Pig_and_Rooster_Storyboard_v14.xlsx`'s Shot List tab,
-  model-agnostic, keyed by one `entry_id` convention (`shot_id`, `CHAR:name`,
-  `MASTER:name`, `PROP:name`). Locking an entry a second time updates the row
-  and appends to its note log rather than duplicating rows.
+- `storyboard_store.py` — reads/writes an `.xlsx` asset registry across
+  three sheets: **Assets** (one row per entry, schema generalized from
+  `Pig_and_Rooster_Storyboard_v14.xlsx`'s Shot List tab), **Panels** (one
+  row per panel of a character/backdrop sheet — see below), and
+  **References** (mood-board images attached before a design locks).
+  Entries are keyed by one `entry_id` convention (`shot_id`, `CHAR:name`,
+  `MASTER:name`, `PROP:name`). Locking an entry (or panel) a second time
+  updates the row in place and appends to its note log rather than
+  duplicating rows.
+- `sheet_composer.py` — renders a composite reference sheet for `CHAR:` and
+  `MASTER:` entries from individually-generated panels, against a **fixed**
+  panel template per entry_type (front/back/profile/expression-grid/etc for
+  characters; day/night/weather/etc for backdrops). The template is fixed
+  on purpose — every character sheet has its panels in the same position,
+  so downstream motion/animation tooling can rely on that consistency.
 - `config.py` — one small persisted JSON config, shared/extended by future
   modules rather than each module inventing its own.
+
+### Building a character or backdrop sheet
+
+Pick `CHAR:` or `MASTER:` as the entry type in the Build tab, and the form
+switches into panel mode: a dropdown lets you pick which panel of the fixed
+template you're working on (e.g. "front view", "angry expression"), each
+panel gets its own generate → pick → lock cycle, and switching between
+panels reloads whatever was last locked for that exact panel instead of
+starting blank. A "Reference images" mood-board section lets you attach
+downloaded/inspiration images with a note before you've settled on a
+design. Once enough panels are locked, "Render preview" assembles them into
+one composite sheet image (unfinished panels show as a placeholder, so you
+can preview progress at any point) — "Save as this entry's reference sheet"
+records that composite as the entry's canonical image in the registry.
 
 ### Quickstart
 

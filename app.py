@@ -2,57 +2,60 @@
 app.py — ComfyUI Director Harness, Module 1: Image Build UI.
 
 One shell, tabs for capability (see SUITE.md):
-  Welcome  — plain-language explanation of what this tool does and how the
-             four tabs fit together. Read this first.
+  Welcome  — plain-language explanation of what this tool does.
   Setup    — point at a ComfyUI instance + a workflow exported via
-             "Save (API Format)", map which node holds the positive prompt,
-             negative prompt, and seed. One-time, works with any workflow.
-  Build    — pick an entry_id (a shot like "1.1" or an asset like
-             "CHAR:pig" / "MASTER:farm_field"), iterate the prompt,
-             generate N variants, pick a winner, lock it into the registry.
-  Registry — read-only view of everything locked so far.
+             "Save (API Format)". One-time, works with any workflow.
+  Build    — the day-to-day workspace. Two shapes, chosen by Type:
+               SHOT   — one image, one prompt. Generate, pick, lock.
+               CHAR / MASTER — a fixed-template composite sheet (front
+               view, expressions, day/night variants, etc — see
+               sheet_composer.py). Each panel of the template is its own
+               generate/pick/lock cycle; the tool renders the panels
+               together into one composite reference image.
+  Registry — read-only view of everything locked so far, including
+             rendered composite sheets.
 
 Mock mode (default ON) generates placeholder images instead of calling
 ComfyUI, so the full loop can be tried with zero setup and no GPU.
-
-Every field with room for confusion carries a short inline hint (Gradio's
-info=) plus a "❓ More info" toggle button that reveals a longer explanation
-without cluttering the form for people who don't need it.
 """
 
 import io
 import json
 import os
 import random
+import shutil
 
 import gradio as gr
 from PIL import Image, ImageDraw
 
 import config as cfgmod
 import storyboard_store as store
+import sheet_composer as composer
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 CFG = cfgmod.load_config()
 os.makedirs(CFG.images_dir, exist_ok=True)
+
+SHEET_TYPES = ("CHAR", "MASTER")
 
 
 # ---------------------------------------------------------------------------
 # Mock generation (no GPU / ComfyUI required)
 # ---------------------------------------------------------------------------
 
-def _mock_image(entry_id: str, prompt: str, seed: int) -> Image.Image:
+def _mock_image(label: str, prompt: str, seed: int) -> Image.Image:
     random.seed(seed)
     color = tuple(random.randint(40, 200) for _ in range(3))
     img = Image.new("RGB", (512, 288), color)
     draw = ImageDraw.Draw(img)
-    text = f"{entry_id}\nseed {seed}\n{prompt[:60]}"
+    text = f"{label}\nseed {seed}\n{prompt[:60]}"
     draw.multiline_text((12, 12), text, fill=(255, 255, 255))
     return img
 
 
-def _save_image(img: Image.Image, entry_id: str, seed: int) -> str:
-    safe_id = str(entry_id).replace(":", "_").replace("/", "_")
-    fname = f"{safe_id}_{seed}.png"
+def _save_image(img: Image.Image, label: str, seed: int) -> str:
+    safe_label = str(label).replace(":", "_").replace("/", "_")
+    fname = f"{safe_label}_{seed}.png"
     path = os.path.join(CFG.images_dir, fname)
     img.save(path)
     return path
@@ -96,13 +99,10 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
 
 
 # ---------------------------------------------------------------------------
-# Build tab logic
+# Core generation (shared by SHOT and per-panel CHAR/MASTER generation)
 # ---------------------------------------------------------------------------
 
-def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_variants):
-    if not entry_id:
-        return [], "⚠️ Give this a name first (Step 1) — try 'CHAR:pig' or '1.1'."
-
+def _generate(label, prompt_positive, prompt_negative, base_seed, n_variants):
     base_seed = int(base_seed) if base_seed not in (None, "") else random.randint(0, 2**31 - 1)
     n_variants = max(1, min(int(n_variants), 8))
 
@@ -120,11 +120,10 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
     for i in range(n_variants):
         seed = base_seed + i
         if CFG.mock_mode:
-            img = _mock_image(entry_id, prompt_positive, seed)
-            path = _save_image(img, entry_id, seed)
+            img = _mock_image(label, prompt_positive, seed)
+            path = _save_image(img, label, seed)
             gallery.append((path, f"seed {seed}"))
             continue
-
         try:
             wf = apply_node_overrides(workflow, CFG.node_mapping, prompt_positive, prompt_negative, seed)
             prompt_id = client.queue_prompt(wf)
@@ -136,7 +135,7 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
             filename, subfolder, folder_type = refs[0]
             img_bytes = client.fetch_image_bytes(filename, subfolder, folder_type)
             img = Image.open(io.BytesIO(img_bytes))
-            path = _save_image(img, entry_id, seed)
+            path = _save_image(img, label, seed)
             gallery.append((path, f"seed {seed}"))
         except ComfyClientError as e:
             status_lines.append(f"seed {seed}: {e}")
@@ -150,38 +149,169 @@ def build_generate(entry_id, prompt_positive, prompt_negative, base_seed, n_vari
     return gallery, status
 
 
-def build_lock(entry_id, entry_type, beat, description, prompt_positive,
+def generate_click(entry_id, entry_type, panel_key, prompt_positive, prompt_negative, base_seed, n_variants):
+    if not entry_id:
+        return [], "⚠️ Give this a name first (Step 1) — try 'CHAR:pig' or '1.1'."
+    if entry_type in SHEET_TYPES and not panel_key:
+        return [], "⚠️ Pick which panel of the sheet you're building first."
+    label = entry_id if entry_type not in SHEET_TYPES else f"{entry_id}__{panel_key}"
+    return _generate(label, prompt_positive, prompt_negative, base_seed, n_variants)
+
+
+def lock_click(entry_id, entry_type, panel_key, beat, description, prompt_positive,
                 prompt_negative, winner_path, winner_seed, note):
     if not entry_id:
         return "⚠️ Give this a name first (Step 1)."
     if not winner_path:
         return "⚠️ Generate some variants (Step 3) and tell me which one won (Step 4) before locking."
 
-    store.lock_entry(
+    if entry_type not in SHEET_TYPES:
+        store.lock_entry(
+            path=CFG.storyboard_path,
+            entry_id=entry_id.strip(),
+            entry_type=entry_type,
+            beat=beat.strip(),
+            description=description.strip(),
+            prompt_positive=prompt_positive.strip(),
+            prompt_negative_add=prompt_negative.strip(),
+            model="mock" if CFG.mock_mode else os.path.basename(CFG.workflow_json_path or ""),
+            seed=winner_seed,
+            reused_from="",
+            image_path=winner_path,
+            note=note.strip(),
+        )
+        return f"🔒 Locked '{entry_id}' with seed {winner_seed}. Check the Registry tab."
+
+    if not panel_key:
+        return "⚠️ Pick which panel of the sheet you're building first."
+    store.lock_panel(
         path=CFG.storyboard_path,
         entry_id=entry_id.strip(),
-        entry_type=entry_type,
-        beat=beat.strip(),
-        description=description.strip(),
+        panel_key=panel_key,
         prompt_positive=prompt_positive.strip(),
         prompt_negative_add=prompt_negative.strip(),
-        model="mock" if CFG.mock_mode else os.path.basename(CFG.workflow_json_path or ""),
         seed=winner_seed,
-        reused_from="",
         image_path=winner_path,
         note=note.strip(),
     )
-    return f"🔒 Locked '{entry_id}' with seed {winner_seed}. Check the Registry tab to see it."
+    template = composer.get_template(entry_type)
+    filled = len(store.get_panel_images(CFG.storyboard_path, entry_id))
+    return (f"🔒 Locked panel '{panel_key}' for '{entry_id}' ({filled}/{len(template)} panels done). "
+            "Render the sheet preview below to see it in context.")
 
+
+# ---------------------------------------------------------------------------
+# Panel-template / context-aware form logic (CHAR / MASTER only)
+# ---------------------------------------------------------------------------
+
+def on_entry_type_change(entry_type):
+    """Show the panel picker + reference/sheet sections only for CHAR/MASTER;
+    populate the panel dropdown from that type's fixed template."""
+    if entry_type in SHEET_TYPES:
+        template = composer.get_template(entry_type)
+        choices = [p["key"] for p in template]
+        return (
+            gr.update(visible=True),
+            gr.update(choices=choices, value=choices[0] if choices else None),
+            gr.update(visible=True),
+        )
+    return gr.update(visible=False), gr.update(choices=[], value=None), gr.update(visible=False)
+
+
+def load_panel_context(entry_id, entry_type, panel_key):
+    """Whenever the name or the selected panel changes, show what's already
+    known instead of a blank form — this is the point of the whole feature:
+    the form should reflect what exists, not assume you remember it."""
+    if entry_type not in SHEET_TYPES or not entry_id or not panel_key:
+        return gr.update(), gr.update(), ""
+    panels = store.list_panels(CFG.storyboard_path, entry_id)
+    match = next((p for p in panels if p.get("panel_key") == panel_key), None)
+    if not match:
+        return "", "", f"No existing prompt for **{panel_key}** yet — describe it fresh below."
+    last_note = (match.get("notes") or "").strip().splitlines()[-1] if match.get("notes") else ""
+    return (
+        match.get("prompt_positive") or "",
+        match.get("prompt_negative_add") or "",
+        f"📄 Loaded the last locked prompt for **{panel_key}** (seed {match.get('seed')}). "
+        f"{last_note} — edit and regenerate, or lock as-is.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reference images (mood board, pre-design)
+# ---------------------------------------------------------------------------
+
+def refresh_references(entry_id):
+    if not entry_id:
+        return []
+    refs = store.list_references(CFG.storyboard_path, entry_id)
+    return [(r["image_path"], r.get("note") or "") for r in refs if r.get("image_path") and os.path.exists(r["image_path"])]
+
+
+def add_reference_ui(entry_id, ref_file, ref_note):
+    if not entry_id:
+        return "⚠️ Enter a name first (Step 1).", refresh_references(entry_id)
+    if ref_file is None:
+        return "⚠️ Choose an image to upload first.", refresh_references(entry_id)
+    dest_dir = os.path.join(CFG.images_dir, "references")
+    os.makedirs(dest_dir, exist_ok=True)
+    safe_id = entry_id.strip().replace(":", "_")
+    fname = os.path.basename(ref_file.name)
+    dest = os.path.join(dest_dir, f"{safe_id}_{fname}")
+    shutil.copy(ref_file.name, dest)
+    store.add_reference(CFG.storyboard_path, entry_id.strip(), dest, (ref_note or "").strip())
+    return f"✅ Added a reference image for {entry_id}.", refresh_references(entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Composite sheet rendering
+# ---------------------------------------------------------------------------
+
+def render_composite_preview(entry_id, entry_type):
+    if not entry_id:
+        return None, "⚠️ Enter a name first (Step 1)."
+    if entry_type not in SHEET_TYPES:
+        return None, "⚠️ Composite sheets are only for CHAR/MASTER entries."
+    panel_images = store.get_panel_images(CFG.storyboard_path, entry_id)
+    safe_id = entry_id.strip().replace(":", "_")
+    out_dir = os.path.join(CFG.images_dir, "sheets")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{safe_id}_sheet.png")
+    composer.render_sheet(entry_id, entry_type, panel_images, out_path)
+    template = composer.get_template(entry_type)
+    filled = sum(1 for p in template if panel_images.get(p["key"]))
+    return out_path, f"🖼️ Rendered preview — {filled}/{len(template)} panels filled in."
+
+
+def save_composite_ui(entry_id, entry_type, composite_path, sheet_note):
+    if not composite_path:
+        return "⚠️ Render a preview first (the button above)."
+    store.set_composite_image(CFG.storyboard_path, entry_id.strip(), entry_type, entry_type,
+                               composite_path, (sheet_note or "").strip())
+    return f"🔒 Saved as {entry_id}'s reference sheet. Check the Registry tab."
+
+
+# ---------------------------------------------------------------------------
+# Registry tab
+# ---------------------------------------------------------------------------
 
 def registry_refresh():
     rows = store.list_entries(CFG.storyboard_path)
-    table = [
+    return [
         [r.get("entry_id"), r.get("entry_type"), r.get("beat"), r.get("description"),
-         r.get("model"), r.get("seed"), r.get("locked"), r.get("image_path")]
+         r.get("model"), r.get("seed"), r.get("locked"), r.get("template"), r.get("image_path")]
         for r in rows
     ]
-    return table
+
+
+def sheets_gallery_refresh():
+    rows = store.list_entries(CFG.storyboard_path)
+    items = []
+    for r in rows:
+        cp = r.get("composite_image_path")
+        if cp and os.path.exists(cp):
+            items.append((cp, r.get("entry_id")))
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -189,23 +319,8 @@ def registry_refresh():
 # ---------------------------------------------------------------------------
 
 def _toggle_help(is_visible):
-    """Shared click handler for every help button: flip a per-field boolean
-    kept in a gr.State, and show/hide that field's detail panel to match."""
     new_val = not bool(is_visible)
     return new_val, gr.update(visible=new_val)
-
-
-def with_help(component, help_markdown: str):
-    """Wrap an already-created component with a '❓ More info' button and a
-    collapsible detail panel underneath. Must be called inside the gr.Row
-    that lays the component out, immediately after creating it — see usage
-    below. Returns the same component unchanged so it can still be wired
-    into other event handlers."""
-    help_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
-    help_panel = gr.Markdown(help_markdown, visible=False, elem_classes=["help-panel"])
-    state = gr.State(False)
-    help_btn.click(_toggle_help, inputs=state, outputs=[state, help_panel])
-    return component
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +350,7 @@ CUSTOM_CSS = """
 .step-3 { background: #fefce8; border-left-color: #eab308; }
 .step-4 { background: #fdf4ff; border-left-color: #c026d3; }
 .step-5 { background: #f0fdf4; border-left-color: #22c55e; }
+.step-6 { background: #fff1f2; border-left-color: #e11d48; }
 .step-card h4 { margin-top: 0 !important; }
 .help-btn { max-width: 40px !important; }
 .help-panel {
@@ -266,20 +382,24 @@ image model, you'll usually make several versions before one actually looks
 right — and once it does, you want to **remember exactly how you made it**
 so you (or a teammate) can reuse or reproduce it later.
 
-This tool is that memory. It walks you through: **generate a batch of
-options → pick your favorite → lock it in with a note about why** — and it
-keeps a running, searchable record of every locked image so nothing gets
-lost in a folder of "final_v3_REAL_final.png" files.
+This tool is that memory. For a single shot, it's: **generate a batch of
+options → pick your favorite → lock it in with a note about why.**
 
-### The three tabs, in the order you'll actually use them
+For a **character or a recurring backdrop**, it's more than one image — it's
+a whole reference sheet (front view, expressions, day/night variants,
+etc.), built one panel at a time and assembled automatically into one
+composite image other generations can point to.
 
-1. **⚙️ Setup** — tell the tool where your image generator lives. You only
-   do this once. *(Not sure yet? Skip it — Mock Mode is on by default and
-   lets you try the whole flow with fake placeholder images first.)*
-2. **🛠️ Build** — your day-to-day workspace. Name what you're making,
-   describe it, generate a few versions, pick your favorite, lock it in.
-3. **📋 Registry** — a read-only list of everything you've locked so far,
-   like a photo album with notes attached to each picture.
+### The tabs, in the order you'll actually use them
+
+1. **⚙️ Setup** — tell the tool where your image generator lives. Skip this
+   at first — Mock Mode is on by default and lets you try everything with
+   fake placeholder images.
+2. **🛠️ Build** — name what you're making. A plain shot is one
+   generate → pick → lock cycle. A character or backdrop walks you through
+   its fixed set of panels one at a time, then renders them into one sheet.
+3. **📋 Registry** — everything you've locked so far, including rendered
+   sheets.
 
 ### The flow, visually
 """
@@ -319,7 +439,7 @@ FLOW_SVG = """
   <line x1="700" y1="85" x2="728" y2="85" stroke="#888" stroke-width="2" marker-end="url(#arrow)"/>
 
   <path d="M805 120 C 805 150, 85 150, 85 120" stroke="#bbb" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#888">not happy? tweak the description and generate again — nothing is locked until Step 5</text>
+  <text x="445" y="160" font-size="12" text-anchor="middle" fill="#888">for a character/backdrop, repeat 2-5 per panel, then render the sheet</text>
 </svg>
 """
 
@@ -327,12 +447,10 @@ WELCOME_MARKDOWN_2 = """
 Once something is locked, it shows up permanently in the **Registry** tab —
 that's your project's single source of truth going forward.
 
-Look for a **❓ More info** button next to any field you're unsure about —
-click it for a longer explanation with examples.
+Look for a **❓ More info** button next to any field you're unsure about.
 
 **Ready?** Click the **🛠️ Build** tab above and try it — Mock Mode is on, so
-this costs nothing and can't break anything. Come back to **⚙️ Setup** only
-once you're ready to connect a real image generator.
+this costs nothing and can't break anything.
 """
 
 
@@ -361,102 +479,66 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         with gr.Group(elem_classes=["step-card", "step-1"]):
             gr.Markdown("#### Mock Mode")
             with gr.Row():
-                mock_mode = with_help(
-                    gr.Checkbox(
-                        label="Mock Mode (recommended while you're learning the tool)",
-                        value=CFG.mock_mode,
-                    ),
-                    "**When ON:** the Build tab never contacts a real image generator — "
-                    "it makes simple colored placeholder images instead, instantly, for "
-                    "free. Use this to learn the generate → review → lock flow risk-free.\n\n"
-                    "**When OFF:** Build sends real requests to the ComfyUI URL and "
-                    "workflow file configured below. Only turn this off once you've "
-                    "built and tested a workflow in ComfyUI's own interface first.",
+                mock_mode = gr.Checkbox(
+                    label="Mock Mode (recommended while you're learning the tool)",
+                    value=CFG.mock_mode, scale=9,
                 )
+                mm_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
+            mm_help = gr.Markdown(
+                "**When ON:** the Build tab never contacts a real image generator — "
+                "it makes simple colored placeholder images instead, instantly, for "
+                "free. Use this to learn the flow risk-free.\n\n"
+                "**When OFF:** Build sends real requests to the ComfyUI URL and "
+                "workflow file below.",
+                visible=False, elem_classes=["help-panel"],
+            )
+            mm_state = gr.State(False)
+            mm_btn.click(_toggle_help, inputs=mm_state, outputs=[mm_state, mm_help])
 
         with gr.Accordion("Real image generator connection (advanced)", open=not CFG.mock_mode):
             gr.Markdown("This section only matters once you turn Mock Mode off.")
 
             with gr.Group(elem_classes=["step-card", "step-2"]):
                 with gr.Row():
-                    comfyui_url = with_help(
-                        gr.Textbox(
-                            label="ComfyUI URL",
-                            value=CFG.comfyui_url,
-                            info="Where ComfyUI is running.",
-                        ),
-                        "If ComfyUI is running on this same computer, the default "
-                        "`http://127.0.0.1:8188` is almost always correct. If it's running "
-                        "on another machine on your network, replace `127.0.0.1` with that "
-                        "machine's IP address, e.g. `http://192.168.1.20:8188`.",
-                    )
+                    comfyui_url = gr.Textbox(label="ComfyUI URL", value=CFG.comfyui_url,
+                                              info="Where ComfyUI is running.", scale=9)
+                    url_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
+                url_help = gr.Markdown(
+                    "If ComfyUI is running on this same computer, the default "
+                    "`http://127.0.0.1:8188` is almost always correct. On another "
+                    "machine, use that machine's IP, e.g. `http://192.168.1.20:8188`.",
+                    visible=False, elem_classes=["help-panel"])
+                url_state = gr.State(False)
+                url_btn.click(_toggle_help, inputs=url_state, outputs=[url_state, url_help])
 
                 gr.Markdown(
                     "In ComfyUI, build and test your image workflow, then use "
                     "**Save (API Format)** to export it as a `.json` file, and "
                     "upload it below."
                 )
-                with gr.Row():
-                    workflow_file = with_help(
-                        gr.File(label="Workflow file", file_types=[".json"]),
-                        "This is **not** the same as ComfyUI's normal 'Save' — that "
-                        "produces a file meant only for ComfyUI's own editor. Look for "
-                        "**Save (API Format)** specifically in ComfyUI's menu; that "
-                        "version is structured so this tool can read and modify it "
-                        "automatically for each new prompt and seed.",
-                    )
+                workflow_file = gr.File(label="Workflow file", file_types=[".json"])
 
-                gr.Markdown(
-                    "**Which part of the workflow does what?** Every workflow is laid "
-                    "out a little differently, so tell the tool which piece is which:"
-                )
+                gr.Markdown("**Which part of the workflow does what?**")
                 with gr.Row():
-                    pos_node = with_help(
-                        gr.Textbox(label="Prompt (positive) node ID",
-                                   value=CFG.node_mapping.positive_prompt_node,
-                                   info="e.g. '6'"),
-                        "Open your workflow's `.json` file in a text editor, or hover "
-                        "the relevant node in ComfyUI — the node ID is the number shown "
-                        "in its corner. This should be the node where your main image "
-                        "description text goes in.",
-                    )
+                    pos_node = gr.Textbox(label="Prompt (positive) node ID",
+                                           value=CFG.node_mapping.positive_prompt_node, info="e.g. '6'")
                     pos_input = gr.Textbox(label="...field name on that node",
-                                            value=CFG.node_mapping.positive_prompt_input,
-                                            info="Usually 'text' — leave as-is unless you know otherwise.")
+                                            value=CFG.node_mapping.positive_prompt_input, info="Usually 'text'")
                 with gr.Row():
-                    neg_node = with_help(
-                        gr.Textbox(label="What-to-avoid node ID",
-                                   value=CFG.node_mapping.negative_prompt_node),
-                        "The node where you list things you don't want to see in the "
-                        "image. Optional — leave blank if your workflow doesn't use a "
-                        "separate negative prompt.",
-                    )
+                    neg_node = gr.Textbox(label="What-to-avoid node ID",
+                                           value=CFG.node_mapping.negative_prompt_node)
                     neg_input = gr.Textbox(label="...field name on that node",
                                             value=CFG.node_mapping.negative_prompt_input)
                 with gr.Row():
-                    seed_node = with_help(
-                        gr.Textbox(label="Seed node ID",
-                                   value=CFG.node_mapping.seed_node),
-                        "Controls randomness. The same seed plus the same prompt "
-                        "reproduces the exact same image later — useful for revisiting "
-                        "a specific result.",
-                    )
+                    seed_node = gr.Textbox(label="Seed node ID", value=CFG.node_mapping.seed_node)
                     seed_input = gr.Textbox(label="...field name on that node",
                                              value=CFG.node_mapping.seed_input)
 
         with gr.Group(elem_classes=["step-card", "step-3"]):
-            with gr.Row():
-                storyboard_path = with_help(
-                    gr.Textbox(
-                        label="Where should locked images be recorded?",
-                        value=CFG.storyboard_path,
-                        info="A spreadsheet file.",
-                    ),
-                    "This is the file the Registry tab reads from. It's created "
-                    "automatically the first time you lock something — you don't need "
-                    "to create it yourself. Use a shared drive path if teammates need "
-                    "to see the same registry.",
-                )
+            storyboard_path = gr.Textbox(
+                label="Where should locked images be recorded?",
+                value=CFG.storyboard_path, info="A spreadsheet file, created automatically.",
+            )
 
         setup_status = gr.Markdown("")
         gr.Button("Save Setup", variant="primary").click(
@@ -469,72 +551,82 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
     with gr.Tab("🛠️ Build"):
         gr.Markdown(
             "Work through the steps top to bottom. Nothing is saved "
-            "permanently until you hit **Lock** at the very end."
+            "permanently until you hit **Lock**."
         )
 
         with gr.Group(elem_classes=["step-card", "step-1"]):
             gr.Markdown("#### Step 1 — Name what you're making")
             with gr.Row():
-                entry_id = with_help(
-                    gr.Textbox(
-                        label="Name",
-                        placeholder="e.g. CHAR:pig, MASTER:farm_field, or a shot number like 1.1",
-                    ),
-                    "Use `CHAR:name` for a character (e.g. `CHAR:pig`), `MASTER:name` "
-                    "for a recurring backdrop or prop (e.g. `MASTER:farm_field`), or "
-                    "just a shot number (e.g. `1.1`) for a single scene. Reusing the "
-                    "same name later updates that entry instead of creating a new one.",
+                entry_id = gr.Textbox(
+                    label="Name",
+                    placeholder="e.g. CHAR:pig, MASTER:farm_field, or a shot number like 1.1",
+                    scale=9,
                 )
-                entry_type = gr.Dropdown(
-                    label="Type",
-                    choices=["SHOT", "CHAR", "MASTER", "PROP"],
-                    value="SHOT",
-                    info="What kind of thing this is.",
-                )
-            beat = gr.Textbox(label="Section / beat (optional)", info="Which part of the story this belongs to, if relevant.")
-            description = gr.Textbox(label="Short description (for your own reference later)", lines=2,
+                id_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
+                entry_type = gr.Dropdown(label="Type", choices=["SHOT", "CHAR", "MASTER", "PROP"],
+                                          value="SHOT", info="What kind of thing this is.")
+            id_help = gr.Markdown(
+                "Use `CHAR:name` for a character (e.g. `CHAR:pig`) or `MASTER:name` "
+                "for a recurring backdrop (e.g. `MASTER:farm_field`) — both build a "
+                "full reference sheet, panel by panel. Use a shot number (e.g. `1.1`) "
+                "for a single scene image. Reusing the same name updates that entry "
+                "instead of creating a new one.",
+                visible=False, elem_classes=["help-panel"])
+            id_state = gr.State(False)
+            id_btn.click(_toggle_help, inputs=id_state, outputs=[id_state, id_help])
+
+            beat = gr.Textbox(label="Section / beat (optional)")
+            description = gr.Textbox(label="Short description (for your own reference)", lines=2,
                                       placeholder="e.g. 'the pig, front-facing, tweed cap'")
+
+            # --- CHAR / MASTER only: panel picker + reference mood board ---
+            with gr.Group(visible=False) as panel_group:
+                gr.Markdown(
+                    "#### This is a sheet — build it one panel at a time\n"
+                    "Every character/backdrop uses the same fixed set of panels, so "
+                    "later tools can always find e.g. the front view in the same spot."
+                )
+                panel_key = gr.Dropdown(label="Which panel are you building?", choices=[])
+                panel_status = gr.Markdown("")
+
+                with gr.Accordion("📎 Reference images (mood board, optional)", open=False):
+                    gr.Markdown(
+                        "Attach downloaded/inspiration images here before you've "
+                        "settled on a design. These are for your own reference — they "
+                        "don't get used as generation input directly."
+                    )
+                    with gr.Row():
+                        ref_file = gr.File(label="Image to attach", file_types=["image"])
+                        ref_note = gr.Textbox(label="What to borrow from it", scale=2,
+                                               placeholder="e.g. 'like this jacket silhouette'")
+                    ref_add_btn = gr.Button("Add reference")
+                    ref_status = gr.Markdown("")
+                    ref_gallery = gr.Gallery(label="Attached references", columns=4, height=200)
+                    ref_add_btn.click(add_reference_ui, inputs=[entry_id, ref_file, ref_note],
+                                       outputs=[ref_status, ref_gallery])
 
         with gr.Group(elem_classes=["step-card", "step-2"]):
             gr.Markdown("#### Step 2 — Describe what you want to see")
-            with gr.Row():
-                prompt_positive = with_help(
-                    gr.Textbox(
-                        label="Describe the image", lines=3,
-                        placeholder="e.g. a dignified pig wearing a tweed cap and waistcoat, hand-painted illustration style",
-                    ),
-                    "This is what the generator will try to draw. Be specific — "
-                    "style, colors, pose, and framing all help. If you're refining an "
-                    "existing character, keep the wording consistent with earlier "
-                    "locked versions so the look doesn't drift.",
-                )
-            with gr.Row():
-                prompt_negative = with_help(
-                    gr.Textbox(
-                        label="Things to avoid (optional)", lines=2,
-                        placeholder="e.g. no watercolor, no extra limbs",
-                    ),
-                    "List anything that keeps showing up in results that you don't "
-                    "want — extra limbs, a wrong art style, unwanted objects in the "
-                    "background, etc.",
-                )
+            prompt_positive = gr.Textbox(
+                label="Describe the image", lines=3,
+                placeholder="e.g. a dignified pig wearing a tweed cap and waistcoat, hand-painted illustration style",
+            )
+            prompt_negative = gr.Textbox(
+                label="Things to avoid (optional)", lines=2,
+                placeholder="e.g. no watercolor, no extra limbs",
+            )
 
         with gr.Group(elem_classes=["step-card", "step-3"]):
             gr.Markdown("#### Step 3 — Generate some options")
             with gr.Row():
-                base_seed = with_help(
-                    gr.Number(label="Seed (leave blank for random)", value=None),
-                    "Only fill this in if you want a reproducible starting point — "
-                    "for example, to nudge a previous winning seed slightly rather "
-                    "than starting over randomly. Leave blank most of the time.",
-                )
-                n_variants = gr.Slider(label="How many versions to generate", minimum=1, maximum=8, step=1, value=4)
+                base_seed = gr.Number(label="Seed (leave blank for random)", value=None)
+                n_variants = gr.Slider(label="How many versions", minimum=1, maximum=8, step=1, value=4)
             gen_btn = gr.Button("Generate", variant="primary")
             gallery = gr.Gallery(label="Your options — each one is labeled with its seed", columns=4)
             gen_status = gr.Markdown("")
             gen_btn.click(
-                build_generate,
-                inputs=[entry_id, prompt_positive, prompt_negative, base_seed, n_variants],
+                generate_click,
+                inputs=[entry_id, entry_type, panel_key, prompt_positive, prompt_negative, base_seed, n_variants],
                 outputs=[gallery, gen_status],
             )
 
@@ -542,47 +634,76 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             gr.Markdown(
                 "#### Step 4 — Which one looks right?\n"
                 "Click an image above to see it larger, then copy its file path and "
-                "seed (shown under the image) into the two boxes below."
+                "seed into the two boxes below."
             )
             with gr.Row():
                 winner_path = gr.Textbox(label="Winning image's file path")
                 winner_seed = gr.Number(label="Winning image's seed")
-            note = with_help(
-                gr.Textbox(
-                    label="Why this one? (this gets saved with the record, permanently)",
-                    lines=2,
-                    placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
-                ),
-                "This becomes part of the permanent audit trail for this asset. Future "
-                "you (or a teammate) will thank you for writing down *why* this one "
-                "won, not just that it did.",
+            note = gr.Textbox(
+                label="Why this one? (saved permanently with the record)", lines=2,
+                placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
             )
 
         with gr.Group(elem_classes=["step-card", "step-5"]):
             gr.Markdown("#### Step 5 — Lock it in")
-            lock_btn = gr.Button("🔒 Lock this into the Registry", variant="primary")
+            lock_btn = gr.Button("🔒 Lock this in", variant="primary")
             lock_status = gr.Markdown("")
             lock_btn.click(
-                build_lock,
-                inputs=[entry_id, entry_type, beat, description, prompt_positive,
+                lock_click,
+                inputs=[entry_id, entry_type, panel_key, beat, description, prompt_positive,
                         prompt_negative, winner_path, winner_seed, note],
                 outputs=lock_status,
             )
 
+        # --- CHAR / MASTER only: composite sheet rendering ---
+        with gr.Group(visible=False, elem_classes=["step-card", "step-6"]) as composite_group:
+            gr.Markdown(
+                "#### Step 6 — Render the sheet\n"
+                "Puts every locked panel together into one composite reference image. "
+                "You can render a preview at any point — panels you haven't locked "
+                "yet just show as a placeholder."
+            )
+            render_btn = gr.Button("Render preview")
+            composite_image = gr.Image(label="Composite sheet preview", type="filepath")
+            render_status = gr.Markdown("")
+            render_btn.click(render_composite_preview, inputs=[entry_id, entry_type],
+                              outputs=[composite_image, render_status])
+
+            sheet_note = gr.Textbox(label="Note for this sheet version", lines=1,
+                                     placeholder="e.g. 'first full pass, 9/13 panels'")
+            save_sheet_btn = gr.Button("🔒 Save as this entry's reference sheet", variant="primary")
+            save_sheet_status = gr.Markdown("")
+            save_sheet_btn.click(save_composite_ui, inputs=[entry_id, entry_type, composite_image, sheet_note],
+                                  outputs=save_sheet_status)
+
+        # --- Wiring for entry_type / panel context awareness ---
+        entry_type.change(on_entry_type_change, inputs=entry_type,
+                           outputs=[panel_group, panel_key, composite_group])
+        entry_id.change(load_panel_context, inputs=[entry_id, entry_type, panel_key],
+                         outputs=[prompt_positive, prompt_negative, panel_status])
+        panel_key.change(load_panel_context, inputs=[entry_id, entry_type, panel_key],
+                          outputs=[prompt_positive, prompt_negative, panel_status])
+        entry_id.change(refresh_references, inputs=entry_id, outputs=ref_gallery)
+
     with gr.Tab("📋 Registry"):
         gr.Markdown(
-            "Everything you've locked so far. If you lock a new version of "
-            "something you've already named (say, a second pass on "
-            "`CHAR:pig`), it updates that same entry and adds your new note "
-            "underneath the old one — it won't create a duplicate."
+            "Everything you've locked so far. Locking a new version of "
+            "something you've already named updates that entry and adds "
+            "your new note underneath the old one — it won't duplicate."
         )
         refresh_btn = gr.Button("Refresh")
         registry_table = gr.Dataframe(
-            headers=["Name", "Type", "Section", "Description", "Model", "Seed", "Locked", "Image path"],
+            headers=["Name", "Type", "Section", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
             interactive=False,
         )
         refresh_btn.click(registry_refresh, outputs=registry_table)
         demo.load(registry_refresh, outputs=registry_table)
+
+        gr.Markdown("#### 🖼️ Character & backdrop sheets")
+        sheets_refresh_btn = gr.Button("Refresh sheets")
+        sheets_gallery = gr.Gallery(label="Rendered composite sheets", columns=3, height=300)
+        sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery)
+        demo.load(sheets_gallery_refresh, outputs=sheets_gallery)
 
 
 if __name__ == "__main__":

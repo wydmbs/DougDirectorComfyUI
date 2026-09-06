@@ -33,10 +33,18 @@ new piece against these before adding it:
 
 ## Module status
 
-- **Module 1 — Image Build UI** (this commit): Setup / Build / Registry
-  tabs. Mock mode tested end-to-end (generate → lock → reload → re-lock
-  appends note → registry reads back). Not yet wired to a live ComfyUI +
-  Flux 2 workflow.
+- **Module 1 — Image Build UI** (this commit): Welcome / Setup / Build /
+  Registry tabs. Two build shapes: a plain SHOT (one image, one prompt) and
+  a CHAR/MASTER sheet (a fixed template of panels — front/back/profile/
+  expressions/etc for characters, day/night/weather/etc for backdrops —
+  each generated and locked independently, then assembled into one
+  composite reference image by the tool). Reference-image mood-boards can
+  be attached to an entry before its design locks. Mock mode tested
+  end-to-end for both shapes: generate → lock → reload → re-lock appends
+  note → registry and sheet gallery read back correctly. Not yet wired to
+  a live ComfyUI + Flux 2 workflow, and the composite sheet is not yet fed
+  back in as a reference image for new generations (still depends on the
+  Flux 2 vs. Nano Banana Pro call).
 - **Module 2 — not started.** Candidates: video generation (MiniMax H3
   Ref2VA/FL2VA) or a QA/conformance reviewer. Whichever starts first should
   extend the same registry rather than create its own.
