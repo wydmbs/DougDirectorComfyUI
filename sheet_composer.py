@@ -3,8 +3,8 @@ sheet_composer.py — renders a fixed-template composite reference sheet
 (character sheet or master-plate sheet) from individually generated panel
 images.
 
-The template per entry_type is FIXED by design: every CHAR sheet has the
-same panels in the same grid position, and every MASTER sheet likewise.
+The template per entry_type is FIXED by design: every CHARACTER sheet has the
+same panels in the same grid position, and every BACKDROP sheet likewise.
 That consistency is what lets downstream motion/animation work assume,
 e.g., "the front view is always at the same normalized position" rather
 than re-discovering layout per character.
@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 
 PANEL_TEMPLATES = {
-    "CHAR": [
+    "CHARACTER": [
         # Full-body turnaround
         {"key": "fullbody_front", "label": "Full body — front"},
         {"key": "fullbody_back", "label": "Full body — back"},
@@ -57,7 +57,7 @@ PANEL_TEMPLATES = {
         {"key": "in_context", "label": "In context (scale)"},
         {"key": "material_palette", "label": "Material palette"},
     ],
-    "MASTER": [
+    "BACKDROP": [
         {"key": "establishing_wide", "label": "Establishing (wide)"},
         {"key": "day", "label": "Day"},
         {"key": "night", "label": "Night"},
@@ -66,7 +66,7 @@ PANEL_TEMPLATES = {
     ],
 }
 
-GRID_COLUMNS = {"CHAR": 4, "MASTER": 3, "PROP": 4}
+GRID_COLUMNS = {"CHARACTER": 4, "BACKDROP": 3, "PROP": 4}
 
 # ---------------------------------------------------------------------------
 # Layout constants
@@ -98,7 +98,7 @@ def _font(size, weight="Regular"):
 
 
 def get_template(entry_type: str):
-    return PANEL_TEMPLATES.get((entry_type or "").upper(), PANEL_TEMPLATES["CHAR"])
+    return PANEL_TEMPLATES.get((entry_type or "").upper(), PANEL_TEMPLATES["CHARACTER"])
 
 
 def render_sheet(entry_id: str, entry_type: str, panel_images: dict, out_path: str,

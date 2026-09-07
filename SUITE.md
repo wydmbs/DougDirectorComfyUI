@@ -23,7 +23,7 @@ new piece against these before adding it:
    If a capability genuinely needs its own long-running process, it should
    still surface through the same shell rather than a separate UI.
 
-4. **One naming/ID convention.** `shot_id` / `CHAR:` / `MASTER:` / `PROP:`
+4. **One naming/ID convention.** `shot_id` / `CHARACTER:` / `BACKDROP:` / `PROP:`
    is the one convention every module refers to an asset by — video clips,
    QA checks, and any future orchestrator all key off the same entry_id.
 
@@ -35,7 +35,7 @@ new piece against these before adding it:
 
 - **Module 1 — Image Build UI** (this commit): Welcome / Setup / Build /
   Registry tabs. Two build shapes: a plain SHOT (one image, one prompt) and
-  a CHAR/MASTER sheet (a fixed template of panels — front/back/profile/
+  a CHARACTER/BACKDROP sheet (a fixed template of panels — front/back/profile/
   expressions/etc for characters, day/night/weather/etc for backdrops —
   each generated and locked independently, then assembled into one
   composite reference image by the tool). Reference-image mood-boards can

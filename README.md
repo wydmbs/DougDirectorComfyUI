@@ -25,7 +25,7 @@ backdrops, shot keyframes):
   Runtime Check equivalent, replaced wholesale each time rather than
   edited row by row, since it's recomputed as a whole from either a
   word-count estimate or a real forced-alignment run). Entries are keyed
-  by one `entry_id` convention (`shot_id`, `CHAR:name`, `MASTER:name`,
+  by one `entry_id` convention (`shot_id`, `CHARACTER:name`, `BACKDROP:name`,
   `PROP:name`). Locking an entry (or panel) a second time updates the row
   in place and appends to its note log rather than duplicating rows.
 - `prepare_ui_assets.py` — one-time local script that resizes the app's
@@ -65,13 +65,13 @@ Locked style contract for any regeneration: flat vector, clean geometric
 shapes, subtle flat shading, no gradients, no drop shadows, no text baked
 into the art. Palette: navy `#172534`, apricot `#E8AE72`, linen `#F5F1E8`,
 slate `#5C6C77`, gold `#F6BE45`.
-- `sheet_composer.py` — renders a composite reference sheet for `CHAR:`,
-  `MASTER:`, and `PROP:` entries from individually-generated panels,
-  against a **fixed** panel template per entry_type. `CHAR` sheets (18
+- `sheet_composer.py` — renders a composite reference sheet for `CHARACTER:`,
+  `BACKDROP:`, and `PROP:` entries from individually-generated panels,
+  against a **fixed** panel template per entry_type. `CHARACTER` sheets (18
   panels): a full-body turnaround (front/back/left/right), an upper-third/
   bust turnaround (front/back/left/right), six forward-facing emotion
   shots, and four supporting panels (attitude pose, costume detail,
-  signature prop, color palette). `MASTER` sheets (5 panels): establishing
+  signature prop, color palette). `BACKDROP` sheets (5 panels): establishing
   wide, day, night, weather variant, detail close-up. `PROP` sheets (9 panels) — for recurring key objects like a ship, cart,
   farmhouse, or crate: a turnaround (front/back/left/right), an interior
   view and an on-it/surface view (present on every prop sheet, but simply
@@ -80,7 +80,7 @@ slate `#5C6C77`, gold `#F6BE45`.
   for scale reference, and a material palette. This generalizes the old
   storyboard's crate-framing grammar (INTERIOR/EXTERIOR/THROUGH-SLATS/N/A)
   to any prop, not just the crate. Note: a scene-level interior like the
-  ship's cargo hold is a `MASTER:` backdrop, not part of the ship's `PROP:`
+  ship's cargo hold is a `BACKDROP:` backdrop, not part of the ship's `PROP:`
   sheet — the interior/on-it panels are for the object's own surfaces, not
   spaces large enough to be their own scene. The
   template is fixed on purpose — every sheet has its panels in the same
@@ -91,7 +91,7 @@ slate `#5C6C77`, gold `#F6BE45`.
 
 ### Building a character, backdrop, or prop sheet
 
-Pick `CHAR:`, `MASTER:`, or `PROP:` as the entry type in the Build tab.
+Pick `CHARACTER:`, `BACKDROP:`, or `PROP:` as the entry type in the Build tab.
 It's a two-stage flow:
 
 1. **Concept (mashup)** — explore freely using downloaded reference images
@@ -128,7 +128,7 @@ once you've hand-built a workflow in ComfyUI's own UI, exported it via
 
 ### Not yet built (intentional scope cuts, not oversights)
 
-- Auto-feeding a locked `MASTER:` plate back in as a reference image for the
+- Auto-feeding a locked `BACKDROP:` plate back in as a reference image for the
   next generation — depends on finalizing which image model (Flux 2 vs. a
   callable API model) since the reference-image mechanism differs between
   them.

@@ -241,8 +241,8 @@ def get_character(path: str, trigger_id: str) -> dict:
 
 def _require_character_trigger(trigger_id: str) -> str:
     normalized = (trigger_id or "").strip()
-    if not normalized.startswith("CHAR:") or len(normalized) <= len("CHAR:"):
-        raise ValueError("Character trigger must start with CHAR:, for example CHAR:alistair_pig.")
+    if not normalized.startswith("CHARACTER:") or len(normalized) <= len("CHARACTER:"):
+        raise ValueError("Character trigger must start with CHARACTER:, for example CHARACTER:alistair_pig.")
     return normalized
 
 

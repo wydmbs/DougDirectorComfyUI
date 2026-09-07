@@ -45,23 +45,23 @@ ITEM_SHAPE_NOTE = """Each item must have this exact shape:
   "reused_from": "optional prior item id"
 }"""
 
-CHAR_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+CHARACTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
 TASK: identify ONLY the characters in the material -- do not identify backdrops, props, or shots in this pass; those come in separate passes. Do not invent named people without textual evidence.
 {ERA_NOTE}
 
 Return JSON only, with this exact shape:
-{{"items": [ {ITEM_SHAPE_NOTE % ('CHAR', 'CHAR:snake_case')} ]}}"""
+{{"items": [ {ITEM_SHAPE_NOTE % ('CHARACTER', 'CHARACTER:snake_case')} ]}}"""
 
-MASTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+BACKDROP_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
-TASK: identify ONLY recurring backdrops/locations in the material (kind "MASTER") -- do not identify characters, props, or shots in this pass; those are handled separately. You will be told which characters were already identified in an earlier pass, for context only.
+TASK: identify ONLY recurring backdrops/locations in the material (kind "BACKDROP") -- do not identify characters, props, or shots in this pass; those are handled separately. You will be told which characters were already identified in an earlier pass, for context only.
 {ERA_NOTE}
 
 A location the story clearly requires but never directly describes (e.g. a farmhouse implied by "farrow & field") MAY be suggested as a tentative item, but mark its continuity_note as "inferred, not explicit in source -- confirm before locking" so the director knows it's a suggestion, not something read directly off the page.
 
 Return JSON only, with this exact shape:
-{{"items": [ {ITEM_SHAPE_NOTE % ('MASTER', 'MASTER:snake_case')} ]}}"""
+{{"items": [ {ITEM_SHAPE_NOTE % ('BACKDROP', 'BACKDROP:snake_case')} ]}}"""
 
 PROP_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
@@ -192,13 +192,13 @@ def _parse_json_block(raw):
 def _clean_items(raw_items):
     clean = []
     for item in raw_items or []:
-        if not isinstance(item, dict) or item.get("kind") not in {"CHAR", "MASTER", "PROP", "SHOT"}:
+        if not isinstance(item, dict) or item.get("kind") not in {"CHARACTER", "BACKDROP", "PROP", "SHOT"}:
             continue
         name = str(item.get("name") or "").strip()
         if not name:
             continue
         kind = item["kind"]
-        prefix = {"CHAR": "CHAR", "MASTER": "MASTER", "PROP": "PROP"}.get(kind)
+        prefix = {"CHARACTER": "CHARACTER", "BACKDROP": "BACKDROP", "PROP": "PROP"}.get(kind)
         suggested = str(item.get("suggested_id") or "").strip()
         if prefix and not suggested.startswith(prefix + ":"):
             suggested = f"{prefix}:{_slug(name)}"
@@ -338,22 +338,22 @@ def analyze(provider, title, source_text, source_path="", uploaded_path=None, er
     # what earlier stages already found so it can reference them for
     # continuity without redefining them.
     warnings = []
-    char_items = _run_stage(provider, CHAR_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings)
-    master_items = _run_stage(
-        provider, MASTER_SYSTEM_PROMPT,
-        base + _context_line("Already-identified characters", char_items) + "\nReturn the JSON now.",
+    character_items = _run_stage(provider, CHARACTER_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings)
+    backdrop_items = _run_stage(
+        provider, BACKDROP_SYSTEM_PROMPT,
+        base + _context_line("Already-identified characters", character_items) + "\nReturn the JSON now.",
         "Backdrops", warnings,
     )
     prop_items = _run_stage(
         provider, PROP_SYSTEM_PROMPT,
-        base + _context_line("Already-identified characters", char_items) + "\n"
-        + _context_line("Already-identified backdrops", master_items) + "\nReturn the JSON now.",
+        base + _context_line("Already-identified characters", character_items) + "\n"
+        + _context_line("Already-identified backdrops", backdrop_items) + "\nReturn the JSON now.",
         "Props", warnings,
     )
 
     shot_user_prompt = (
-        base + _context_line("Characters", char_items) + "\n"
-        + _context_line("Backdrops", master_items) + "\n"
+        base + _context_line("Characters", character_items) + "\n"
+        + _context_line("Backdrops", backdrop_items) + "\n"
         + _context_line("Props", prop_items) + "\nReturn the JSON now."
     )
     try:
@@ -365,12 +365,12 @@ def analyze(provider, title, source_text, source_path="", uploaded_path=None, er
         warnings.append(f"⚠️ Shots pass failed: {error}")
         shot_items, summary, questions = [], "", []
 
-    all_items = char_items + master_items + prop_items + shot_items
+    all_items = character_items + backdrop_items + prop_items + shot_items
     if not all_items:
         raise HarryError("Harry could not produce any recommendations. " + " ".join(warnings))
 
     if not summary:
-        summary = (f"Identified {len(char_items)} character(s), {len(master_items)} backdrop(s), "
+        summary = (f"Identified {len(character_items)} character(s), {len(backdrop_items)} backdrop(s), "
                    f"{len(prop_items)} prop(s), and {len(shot_items)} shot(s) across separate focused passes.")
 
     plan = {"summary": summary, "questions": questions + warnings, "items": all_items}

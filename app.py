@@ -7,7 +7,7 @@ One shell, tabs for capability (see SUITE.md):
              "Save (API Format)". One-time, works with any workflow.
   Build    — the day-to-day workspace. Two shapes, chosen by Type:
                SHOT   — one image, one prompt. Generate, pick, lock.
-               CHAR / MASTER — a fixed-template composite sheet (front
+               CHARACTER / BACKDROP — a fixed-template composite sheet (front
                view, expressions, day/night variants, etc — see
                sheet_composer.py). Each panel of the template is its own
                generate/pick/lock cycle; the tool renders the panels
@@ -90,7 +90,7 @@ def activate_project(project_id):
 
 activate_project(ACTIVE_PROJECT_ID)
 
-SHEET_TYPES = ("CHAR", "MASTER", "PROP")
+SHEET_TYPES = ("CHARACTER", "BACKDROP", "PROP")
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ def project_progress_html():
     plan_count = len(list(harry.LIBRARY_DIR.glob("plan_*.json"))) if harry.LIBRARY_DIR.exists() else 0
     preset_count = len(harry.load_presets())
     beat_count = len(store.list_beats(CFG.storyboard_path))
-    rows = [("Source", f"{source_count} revision(s)", source_count), ("Harry plan", f"{plan_count} revision(s)", plan_count), ("Build drafts", f"{preset_count} approved", preset_count), ("Characters", f"{count('CHAR')} locked", count('CHAR')), ("Backdrops", f"{count('MASTER')} locked", count('MASTER')), ("Props", f"{count('PROP')} locked", count('PROP')), ("Shots", f"{count('SHOT')} locked", count('SHOT')), ("Narration timing", f"{beat_count} beat(s)", beat_count)]
+    rows = [("Source", f"{source_count} revision(s)", source_count), ("Harry plan", f"{plan_count} revision(s)", plan_count), ("Build drafts", f"{preset_count} approved", preset_count), ("Characters", f"{count('CHARACTER')} locked", count('CHARACTER')), ("Backdrops", f"{count('BACKDROP')} locked", count('BACKDROP')), ("Props", f"{count('PROP')} locked", count('PROP')), ("Shots", f"{count('SHOT')} locked", count('SHOT')), ("Narration timing", f"{beat_count} beat(s)", beat_count)]
     items = "".join(f'<li class="{"done" if done else "next"}"><b>{"✓" if done else "○"} {label}</b><span>{detail}</span></li>' for label, detail, done in rows)
     return f'<aside class="project-progress"><div class="progress-kicker">ACTIVE PROJECT</div><h3>{project.get("title", "Untitled Project")}</h3><div class="progress-version">{project.get("version", "v1")}</div><h4>Progress</h4><ul>{items}<li><b>○ Video & QA</b><span>future module</span></li></ul></aside>'
 
@@ -316,13 +316,13 @@ def apply_build_preset(index):
         item = items[int(index)]
     except (IndexError, ValueError, TypeError):
         return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-    return (gr.update(value=item.get("kind", "CHAR")), item.get("suggested_id", ""),
+    return (gr.update(value=item.get("kind", "CHARACTER")), item.get("suggested_id", ""),
             item.get("description", ""), item.get("positive_prompt", ""), item.get("negative_prompt", ""),
             item.get("beat", ""), item.get("reused_from", ""))
 
 
 # ---------------------------------------------------------------------------
-# Core generation (shared by SHOT and per-panel CHAR/MASTER generation)
+# Core generation (shared by SHOT and per-panel CHARACTER/BACKDROP generation)
 # ---------------------------------------------------------------------------
 
 def _generate(label, prompt_positive, prompt_negative, base_seed, n_variants):
@@ -379,7 +379,7 @@ PANEL_STAGE = "Sheet panel"
 def generate_click(entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
                     base_seed, n_variants):
     if not entry_id:
-        return [], "⚠️ Give this a name first (Step 1) — try 'CHAR:pig' or '1.1'."
+        return [], "⚠️ Give this a name first (Step 1) — try 'CHARACTER:pig' or '1.1'."
     if entry_type in SHEET_TYPES and build_stage == PANEL_STAGE and not panel_key:
         return [], "⚠️ Pick which panel of the sheet you're building first."
 
@@ -456,26 +456,26 @@ def lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, 
 
 
 # ---------------------------------------------------------------------------
-# Panel-template / context-aware form logic (CHAR / MASTER only)
+# Panel-template / context-aware form logic (CHARACTER / BACKDROP only)
 # ---------------------------------------------------------------------------
 
 BUILD_CONTEXT = {
-    "CHAR": ("🦊", "Character", "Build a reusable character design: lock a concept first, then make its 18 consistent pose, expression, costume, and palette panels."),
-    "MASTER": ("🏞️", "Backdrop", "Build a recurring location: lock its concept, then define its establishing, day, night, weather, and detail views."),
+    "CHARACTER": ("🦊", "Character", "Build a reusable character design: lock a concept first, then make its 18 consistent pose, expression, costume, and palette panels."),
+    "BACKDROP": ("🏞️", "Backdrop", "Build a recurring location: lock its concept, then define its establishing, day, night, weather, and detail views."),
     "PROP": ("🧰", "Prop", "Build a recurring object: lock its concept, then define its turnaround, surface, detail, scale, and material panels."),
     "SHOT": ("🎬", "Shot", "Build one scene keyframe. Generate options, select the strongest image, and lock it with its prompt and seed."),
 }
 
-BUILD_TYPE_CHOICES = [("Character", "CHAR"), ("Backdrop", "MASTER"), ("Prop", "PROP"), ("Shot", "SHOT")]
+BUILD_TYPE_CHOICES = [("Character", "CHARACTER"), ("Backdrop", "BACKDROP"), ("Prop", "PROP"), ("Shot", "SHOT")]
 GENERIC_IDENTITY = {
-    "MASTER": ("Backdrop name", "e.g. MASTER:farm_field", "Use a stable backdrop ID for this recurring place."),
+    "BACKDROP": ("Backdrop name", "e.g. BACKDROP:farm_field", "Use a stable backdrop ID for this recurring place."),
     "PROP": ("Prop name", "e.g. PROP:crate", "Use a stable prop ID for this recurring object."),
     "SHOT": ("Shot number", "e.g. 1.1", "Use the storyboard shot number for this one-off keyframe."),
 }
 
 
 def build_context(entry_type):
-    icon, title, description = BUILD_CONTEXT.get(entry_type, BUILD_CONTEXT["CHAR"])
+    icon, title, description = BUILD_CONTEXT.get(entry_type, BUILD_CONTEXT["CHARACTER"])
     return (
         f'<div class="build-context build-context-{entry_type.lower()}">'
         f'<div class="build-context-icon" aria-hidden="true">{icon}</div>'
@@ -488,7 +488,7 @@ def build_context(entry_type):
 def on_entry_type_change(entry_type):
     """Set the active workflow, identity form, and banner for the selected build type."""
     generic_update = gr.update()
-    if entry_type != "CHAR":
+    if entry_type != "CHARACTER":
         label, placeholder, info = GENERIC_IDENTITY[entry_type]
         generic_update = gr.update(label=label, placeholder=placeholder, info=info, value="")
 
@@ -496,8 +496,8 @@ def on_entry_type_change(entry_type):
         template = composer.get_template(entry_type)
         choices = [panel["key"] for panel in template]
         return (
-            gr.update(visible=(entry_type == "CHAR")),
-            gr.update(visible=(entry_type != "CHAR")),
+            gr.update(visible=(entry_type == "CHARACTER")),
+            gr.update(visible=(entry_type != "CHARACTER")),
             gr.update(choices=choices, value=choices[0] if choices else None),
             gr.update(visible=True),
             gr.update(value=CONCEPT_STAGE),
@@ -522,7 +522,7 @@ def character_choices():
 
 def character_trigger(value):
     slug = "_".join((value or "").strip().lower().replace("-", " ").split())
-    return f"CHAR:{slug}" if slug else "CHAR:your_character_name"
+    return f"CHARACTER:{slug}" if slug else "CHARACTER:your_character_name"
 
 
 def character_trigger_preview(value):
@@ -540,7 +540,7 @@ def select_character_ui(trigger_id):
 def create_character_ui(trigger_slug, display_name, working_note):
     try:
         trigger_id = character_trigger(trigger_slug)
-        if trigger_id == "CHAR:your_character_name":
+        if trigger_id == "CHARACTER:your_character_name":
             raise ValueError("Enter a character name to create its trigger.")
         store.create_character(CFG.storyboard_path, trigger_id, display_name, working_note)
         return (gr.update(choices=character_choices(), value=trigger_id), trigger_id, display_name.strip(),
@@ -560,7 +560,7 @@ def save_character_ui(trigger_id, display_name, working_note):
 def rename_character_ui(trigger_id, new_trigger_slug):
     try:
         new_trigger_id = character_trigger(new_trigger_slug)
-        if new_trigger_id == "CHAR:your_character_name":
+        if new_trigger_id == "CHARACTER:your_character_name":
             raise ValueError("Enter a character name for the new trigger.")
         store.rename_character(CFG.storyboard_path, trigger_id, new_trigger_id)
         character = store.get_character(CFG.storyboard_path, new_trigger_id)
@@ -583,7 +583,7 @@ def delete_character_ui(trigger_id, confirmed):
 
 def draft_prompt_brief(target_model, entry_id, display_name, working_note, positive_prompt, negative_prompt):
     identity = display_name.strip() or entry_id.strip() or "the character"
-    trigger = entry_id.strip() or "CHAR:your_trigger"
+    trigger = entry_id.strip() or "CHARACTER:your_trigger"
     note = working_note.strip() or "No additional continuity note supplied."
     positive = positive_prompt.strip() or "Describe the character, composition, wardrobe, pose, style, and lighting."
     negative = negative_prompt.strip() or "List anatomy, style, rendering, or continuity failures to avoid."
@@ -703,7 +703,7 @@ def render_composite_preview(entry_id, entry_type):
     if not entry_id:
         return None, "⚠️ Enter a name first (Step 1)."
     if entry_type not in SHEET_TYPES:
-        return None, "⚠️ Composite sheets are only for CHAR/MASTER entries."
+        return None, "⚠️ Composite sheets are only for CHARACTER/BACKDROP entries."
     panel_images = store.get_panel_images(CFG.storyboard_path, entry_id)
     concept_entry = store.get_entry(CFG.storyboard_path, entry_id)
     concept_path = concept_entry.get("image_path") if concept_entry else None
@@ -1188,7 +1188,7 @@ still the one who says "print it."
 
 On set, in **Build**, first choose whether you're building a **Character**,
 **Backdrop**, **Prop**, or **Shot**. A Character gets a permanent
-`CHAR:name` trigger for every future prompt and LoRA run — its screen
+`CHARACTER:name` trigger for every future prompt and LoRA run — its screen
 credit, in a sense. Reusable assets get a concept locked first, then a full
 reference sheet of consistent takes. A Shot is a direct
 roll camera → review dailies → print loop.
@@ -1442,7 +1442,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 "Every scene starts here. Work the slate top to bottom — nothing "
                 "makes it into the final reel until you **print the take**."
             )
-            build_context_banner = gr.HTML(build_context("CHAR"))
+            build_context_banner = gr.HTML(build_context("CHARACTER"))
             with gr.Group(elem_classes=["step-card", "step-1"]):
                 build_preset = gr.Dropdown(label="Start from a Harry-approved draft (optional)", choices=harry.preset_choices(), value=None,
                                            info="This fills Build fields from an approved draft. It does not create or lock an asset.")
@@ -1451,12 +1451,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
             with gr.Group(elem_classes=["step-card", "step-1"]):
                 gr.Markdown("#### Step 1 — Choose what you are building")
-                entry_type = gr.Dropdown(label="What are you building?", choices=BUILD_TYPE_CHOICES, value="CHAR",
+                entry_type = gr.Dropdown(label="What are you building?", choices=BUILD_TYPE_CHOICES, value="CHARACTER",
                                          info="Choose this first. The identity, references, and workflow below change for Character, Backdrop, Prop, or Shot.")
                 gr.Markdown("#### Step 2 — Name it and add references")
                 with gr.Group(elem_classes=["character-manager"]) as character_manager:
                     gr.Markdown("**Create a Character**")
-                    gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHAR:`.")
+                    gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHARACTER:`.")
                     with gr.Row():
                         new_trigger = gr.Textbox(label="Character name for the trigger", placeholder="e.g. wilbur_the_pig")
                         new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Wilbur the Pig")
@@ -1479,12 +1479,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     delete_character_btn = gr.Button("Delete Character records", variant="stop")
                 entry_id = gr.Textbox(visible=False)
                 with gr.Group(visible=False) as generic_identity_group:
-                    generic_entry_id = gr.Textbox(label="Backdrop name", placeholder="e.g. MASTER:farm_field",
+                    generic_entry_id = gr.Textbox(label="Backdrop name", placeholder="e.g. BACKDROP:farm_field",
                                                    info="Use a stable backdrop ID for this recurring place.")
                     generic_entry_id.change(lambda value: value, inputs=generic_entry_id, outputs=entry_id)
                 with gr.Row():
                     beat = gr.Textbox(label="Section / beat (optional)", placeholder="e.g. The Storm, or Beat 3")
-                    reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHAR:alistair_pig, or MASTER:ship_deck")
+                    reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHARACTER:alistair_pig, or BACKDROP:ship_deck")
                 description = gr.Textbox(label="Working description (optional)", lines=2,
                                           placeholder="For your own reference only, e.g. Alistair facing camera in his everyday tweed")
                 with gr.Group(visible=True) as panel_group:
@@ -1492,7 +1492,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     with gr.Row():
                         build_stage = gr.Radio(label="Build stage", choices=[CONCEPT_STAGE, PANEL_STAGE], value=CONCEPT_STAGE, scale=2)
                         concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1, height=120)
-                    panel_key = gr.Dropdown(label="Sheet panel", choices=[panel["key"] for panel in composer.get_template("CHAR")], value="fullbody_front", visible=False)
+                    panel_key = gr.Dropdown(label="Sheet panel", choices=[panel["key"] for panel in composer.get_template("CHARACTER")], value="fullbody_front", visible=False)
                     panel_status = gr.Markdown("")
                     with gr.Accordion("Reference images — add a mood board", open=True):
                         gr.Markdown("Upload visual references before creating the concept. They are retained with the character record for continuity; this version does not send them into the generator automatically.")
@@ -1555,7 +1555,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     outputs=lock_status,
                 ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
-            # --- CHAR / MASTER only: composite sheet rendering ---
+            # --- CHARACTER / BACKDROP only: composite sheet rendering ---
             with gr.Group(visible=True, elem_classes=["step-card", "step-6"]) as composite_group:
                 gr.Markdown(
                     "#### Step 6 — Assemble the reel\n"
