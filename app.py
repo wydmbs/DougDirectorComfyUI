@@ -179,7 +179,16 @@ def harry_analyze(provider, title, source_text, source_id, audio_file):
         plan = harry.analyze(provider, title, source_text, source_id, audio_file.name if audio_file else None)
         return plan, plan["summary"], "\n".join(f"• {question}" for question in plan["questions"]) or "Harry has no essential questions.", harry.plan_to_rows(plan), plan.get("source_path", ""), f"Harry recommended {len(plan['items'])} editable draft artifacts."
     except harry.HarryError as error:
-        return {}, "", "", [], f"⚠️ {error}"
+        # NOTE: this branch previously returned 5 values against the success
+        # path's 6, which would raise inside Gradio's callback dispatch the
+        # first time Harry actually failed. Fixed to match arity.
+        return {}, "", "", [], "", f"⚠️ {error}"
+
+
+def harry_analyze_ui(provider, title, source_text, source_id, audio_file):
+    plan, summary, questions, rows, new_source_id, status = harry_analyze(
+        provider, title, source_text, source_id, audio_file)
+    return plan, summary, questions, rows, new_source_id, reward_card(status)
 
 
 def harry_apply_drafts(rows, plan):
@@ -187,7 +196,12 @@ def harry_apply_drafts(rows, plan):
     harry.save_presets(approved)
     return (gr.update(choices=harry.preset_choices(), value=None),
             gr.update(choices=harry.checklist_choices(), value=[]),
-            f"Applied {len(approved['items'])} approved drafts to Build. They are presets only; nothing is locked.")
+            f"Approved {len(approved['items'])} call sheet items → sent to Build. They are presets only; nothing is printed yet.")
+
+
+def harry_apply_drafts_ui(rows, plan):
+    preset_update, checklist_update, status = harry_apply_drafts(rows, plan)
+    return preset_update, checklist_update, reward_card(status)
 
 
 def apply_build_preset(index):
@@ -1399,47 +1413,54 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
     with gr.Tab("🧭 Harry the Advisor"):
-        gr.Markdown("## Harry the Advisor\nStart with the script, story, poem, or narration. Harry proposes the production prep list; you edit and approve it before it becomes Build presets.")
+        gr.Markdown(
+            "## 🎬 Harry — your assistant director\n"
+            "Every production needs a first AD to read the script and build the "
+            "call sheet before the director steps on set. That's Harry. Bring "
+            "him the script, story, poem, or narration; he proposes the "
+            "production prep list; you edit and approve it before it becomes "
+            "Build presets."
+        )
         with gr.Group(elem_classes=["step-card", "step-1"]):
             harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
             gr.HTML('<div class="harry-intake"><strong>Choose one source route:</strong> <strong>Option A — attach a text document</strong>, <strong>Option B — paste text</strong>, or <strong>Option C — attach narration audio</strong> and transcribe it locally. You may combine them when useful.</div>')
             with gr.Row():
                 with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option A — Attach text**\n\nAttach a `.txt`, `.md`, `.docx`, or `.pdf` script, story, poem, or treatment. Load it into the text area to review before Harry sees it.")
+                    gr.Markdown("**Option A — Attach text**\n\nAttach a `.txt`, `.md`, `.docx`, or `.pdf` script, story, poem, or treatment. Load it into the text area to review before Harry reads it.")
                     harry_text_file = gr.File(label="Text document", file_types=[".txt", ".md", ".docx", ".pdf"])
                     harry_extract_btn = gr.Button("Load attached text")
                 with gr.Group(elem_classes=["harry-source-option"]):
                     gr.Markdown("**Option B — Paste text**\n\nPaste a script, story, poem, narration, or treatment directly.")
                     harry_source = gr.Textbox(label="Written source text", lines=14, placeholder="Paste your script, story, poem, or narration here…")
                 with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before asking Harry.")
+                    gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before Harry reads it.")
                     harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
                     harry_transcribe_btn = gr.Button("Transcribe audio locally")
             harry_save_btn = gr.Button("Save current source to project library")
             harry_source_id = gr.State("")
             harry_source_status = gr.Markdown("")
         with gr.Group(elem_classes=["step-card", "step-2"]):
-            gr.Markdown("#### Let Harry recommend the preparation list")
+            gr.Markdown("#### Ask Harry for the call sheet")
             harry_provider_run = gr.Dropdown(label="Provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider)
             harry_privacy = gr.Markdown(harry.provider_status(CFG.harry_provider))
             harry_provider_run.change(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
             harry_run_btn = gr.Button("Ask Harry for recommendations", variant="primary")
-            harry_status = gr.Markdown("")
-            harry_summary = gr.Textbox(label="Harry's production reading", lines=4, interactive=False)
+            harry_status = gr.HTML("")
+            harry_summary = gr.Textbox(label="Harry's read on the production", lines=4, interactive=False)
             harry_questions = gr.Textbox(label="Only if essential: Harry's clarification questions", lines=3, interactive=False)
         with gr.Group(elem_classes=["step-card", "step-3"]):
-            gr.Markdown("#### Review, refine, and approve drafts\nUntick anything you do not want. Every field is editable. Applying creates Build presets only; it does not lock assets.")
+            gr.Markdown("#### Review, refine, and approve the call sheet\nUntick anything you do not want. Every field is editable. Approving creates Build presets only; it does not print any takes.")
             harry_plan = gr.State({})
             harry_table = gr.Dataframe(headers=["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note", "Positive prompt", "Negative prompt", "Beat", "Chained from"],
                                       datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
-            harry_apply_btn = gr.Button("Apply approved drafts to Build", variant="primary")
-            harry_apply_status = gr.Markdown("")
+            harry_apply_btn = gr.Button("Approve call sheet → send to Build", variant="primary")
+            harry_apply_status = gr.HTML("")
         harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
         harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
         harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
-        harry_run_btn.click(harry_analyze, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio],
+        harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio],
                             outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_status])
-        harry_apply_btn.click(harry_apply_drafts, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
+        harry_apply_btn.click(harry_apply_drafts_ui, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
 
     with gr.Tab("📋 Registry"):
         gr.Markdown(
