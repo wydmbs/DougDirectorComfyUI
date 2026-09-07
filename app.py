@@ -1233,393 +1233,397 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         new_project_status = gr.Markdown("")
     progress_panel = gr.HTML(project_progress_html())
 
-    with gr.Tab("👋 Welcome"):
-        with gr.Group(elem_id="welcome-hero"):
-            if UI_IMAGES["welcome_hero"]:
-                gr.HTML(f'<img src="{UI_IMAGES["welcome_hero"]}" alt="" style="width:100%;border-radius:10px;display:block;margin-bottom:14px;" />')
-            gr.Markdown(WELCOME_MARKDOWN)
-            gr.HTML(FLOW_SVG)
-            gr.Markdown(WELCOME_MARKDOWN_2)
+    with gr.Tabs() as main_tabs:
+        with gr.Tab("👋 Welcome", id="welcome"):
+            with gr.Group(elem_id="welcome-hero"):
+                if UI_IMAGES["welcome_hero"]:
+                    gr.HTML(f'<img src="{UI_IMAGES["welcome_hero"]}" alt="" style="width:100%;border-radius:10px;display:block;margin-bottom:14px;" />')
+                gr.Markdown(WELCOME_MARKDOWN)
+                gr.HTML(FLOW_SVG)
+                gr.Markdown(WELCOME_MARKDOWN_2)
 
-    with gr.Tab("⚙️ Setup"):
-        gr.Markdown(
-            "### One-time setup\n"
-            "You only need this if you're connecting a real image generator "
-            "(ComfyUI). **If you just want to try the tool out, skip straight "
-            "to the Build tab** — Mock Mode below is on by default and fakes "
-            "everything safely."
-        )
-
-        with gr.Group(elem_classes=["step-card", "step-1"]):
-            gr.Markdown("#### Mock Mode")
-            with gr.Row():
-                mock_mode = gr.Checkbox(
-                    label="Mock Mode (recommended while you're learning the tool)",
-                    value=CFG.mock_mode, scale=9,
-                )
-                mm_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
-            mm_help = gr.Markdown(
-                "**When ON:** the Build tab never contacts a real image generator — "
-                "it makes simple colored placeholder images instead, instantly, for "
-                "free. Use this to learn the flow risk-free.\n\n"
-                "**When OFF:** Build sends real requests to the ComfyUI URL and "
-                "workflow file below.",
-                visible=False, elem_classes=["help-panel"],
+        with gr.Tab("⚙️ Setup", id="setup"):
+            gr.Markdown(
+                "### One-time setup\n"
+                "You only need this if you're connecting a real image generator "
+                "(ComfyUI). **If you just want to try the tool out, skip straight "
+                "to the Build tab** — Mock Mode below is on by default and fakes "
+                "everything safely."
             )
-            mm_state = gr.State(False)
-            mm_btn.click(_toggle_help, inputs=mm_state, outputs=[mm_state, mm_help])
 
-        with gr.Accordion("Real image generator connection (advanced)", open=not CFG.mock_mode):
-            gr.Markdown("This section only matters once you turn Mock Mode off.")
+            with gr.Group(elem_classes=["step-card", "step-1"]):
+                gr.Markdown("#### Mock Mode")
+                with gr.Row():
+                    mock_mode = gr.Checkbox(
+                        label="Mock Mode (recommended while you're learning the tool)",
+                        value=CFG.mock_mode, scale=9,
+                    )
+                    mm_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
+                mm_help = gr.Markdown(
+                    "**When ON:** the Build tab never contacts a real image generator — "
+                    "it makes simple colored placeholder images instead, instantly, for "
+                    "free. Use this to learn the flow risk-free.\n\n"
+                    "**When OFF:** Build sends real requests to the ComfyUI URL and "
+                    "workflow file below.",
+                    visible=False, elem_classes=["help-panel"],
+                )
+                mm_state = gr.State(False)
+                mm_btn.click(_toggle_help, inputs=mm_state, outputs=[mm_state, mm_help])
+
+            with gr.Accordion("Real image generator connection (advanced)", open=not CFG.mock_mode):
+                gr.Markdown("This section only matters once you turn Mock Mode off.")
+
+                with gr.Group(elem_classes=["step-card", "step-2"]):
+                    with gr.Row():
+                        comfyui_url = gr.Textbox(label="ComfyUI URL", value=CFG.comfyui_url,
+                                                  info="Where ComfyUI is running.", scale=9)
+                        url_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
+                    url_help = gr.Markdown(
+                        "If ComfyUI is running on this same computer, the default "
+                        "`http://127.0.0.1:8188` is almost always correct. On another "
+                        "machine, use that machine's IP, e.g. `http://192.168.1.20:8188`.",
+                        visible=False, elem_classes=["help-panel"])
+                    url_state = gr.State(False)
+                    url_btn.click(_toggle_help, inputs=url_state, outputs=[url_state, url_help])
+
+                    gr.Markdown(
+                        "In ComfyUI, build and test your image workflow, then use "
+                        "**Save (API Format)** to export it as a `.json` file, and "
+                        "upload it below."
+                    )
+                    workflow_file = gr.File(label="Workflow file", file_types=[".json"])
+
+                    gr.Markdown("**Which part of the workflow does what?**")
+                    with gr.Row():
+                        pos_node = gr.Textbox(label="Prompt (positive) node ID",
+                                               value=CFG.node_mapping.positive_prompt_node, info="e.g. '6'")
+                        pos_input = gr.Textbox(label="...field name on that node",
+                                                value=CFG.node_mapping.positive_prompt_input, info="Usually 'text'")
+                    with gr.Row():
+                        neg_node = gr.Textbox(label="What-to-avoid node ID",
+                                               value=CFG.node_mapping.negative_prompt_node)
+                        neg_input = gr.Textbox(label="...field name on that node",
+                                                value=CFG.node_mapping.negative_prompt_input)
+                    with gr.Row():
+                        seed_node = gr.Textbox(label="Seed node ID", value=CFG.node_mapping.seed_node)
+                        seed_input = gr.Textbox(label="...field name on that node",
+                                                 value=CFG.node_mapping.seed_input)
+
+            with gr.Group(elem_classes=["step-card", "step-3"]):
+                storyboard_path = gr.Textbox(
+                    label="Where should locked images be recorded?",
+                    value=CFG.storyboard_path, info="A spreadsheet file, created automatically.",
+                )
+                gr.Markdown("#### Harry the Advisor provider")
+                harry_provider = gr.Dropdown(label="Advisor model provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider,
+                                             info="Claude is the default. Azure OpenAI reuses the local OpenScout Azure configuration and its environment key.")
+                harry_provider_note = gr.Markdown(harry.provider_status(CFG.harry_provider))
+                harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
+
+            setup_status = gr.Markdown("")
+            setup_save_event = gr.Button("Save Setup", variant="primary").click(
+                setup_save,
+                inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
+                        seed_node, seed_input, storyboard_path, mock_mode, harry_provider],
+                outputs=setup_status,
+            )
+
+        with gr.Tab("🛠️ Build", id="build"):
+            build_icon = (f'<img src="{UI_IMAGES["tab_icon_build"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                         if UI_IMAGES["tab_icon_build"] else "🎥 ")
+            gr.HTML(f'<h2 style="display:flex;align-items:center;">{build_icon}On set</h2>')
+            gr.Markdown(
+                "Every scene starts here. Work the slate top to bottom — nothing "
+                "makes it into the final reel until you **print the take**."
+            )
+            build_context_banner = gr.HTML(build_context("CHAR"))
+            with gr.Group(elem_classes=["step-card", "step-1"]):
+                build_preset = gr.Dropdown(label="Start from a Harry-approved draft (optional)", choices=harry.preset_choices(), value=None,
+                                           info="This fills Build fields from an approved draft. It does not create or lock an asset.")
+                build_checklist = gr.CheckboxGroup(label="Harry prep checklist", choices=harry.checklist_choices(), value=[],
+                                                    info="Tick artifacts as you complete them. This is a working checklist; locking remains the permanent record.")
+
+            with gr.Group(elem_classes=["step-card", "step-1"]):
+                gr.Markdown("#### Step 1 — Choose what you are building")
+                entry_type = gr.Dropdown(label="What are you building?", choices=BUILD_TYPE_CHOICES, value="CHAR",
+                                         info="Choose this first. The identity, references, and workflow below change for Character, Backdrop, Prop, or Shot.")
+                gr.Markdown("#### Step 2 — Name it and add references")
+                with gr.Group(elem_classes=["character-manager"]) as character_manager:
+                    gr.Markdown("**Create a Character**")
+                    gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHAR:`.")
+                    with gr.Row():
+                        new_trigger = gr.Textbox(label="Character name for the trigger", placeholder="e.g. wilbur_the_pig")
+                        new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Wilbur the Pig")
+                    trigger_preview = gr.HTML(character_trigger_preview(""))
+                    new_working_note = gr.Textbox(label="Working continuity note", lines=2,
+                                                   placeholder="e.g. practical Victorian country gentleman; tweed cap, waistcoat, calm and capable")
+                    create_character_btn = gr.Button("Create and lock character", variant="primary")
+                    character_status = gr.Markdown("")
+                    gr.Markdown("---\n**Choose or manage an existing Character**")
+                    character_select = gr.Dropdown(label="Existing Character", choices=character_choices(), value=None,
+                                                   info="Select a character after it has been created.")
+                    with gr.Row():
+                        character_display_name = gr.Textbox(label="Selected display name")
+                        character_working_note = gr.Textbox(label="Selected continuity note", lines=2)
+                    with gr.Row():
+                        save_character_btn = gr.Button("Save character details")
+                        rename_trigger = gr.Textbox(label="New character name for the trigger", placeholder="e.g. wilbur_the_pig")
+                        rename_character_btn = gr.Button("Rename character trigger")
+                    delete_confirmation = gr.Checkbox(label="I understand deletion removes this Character's registry records, concepts, panels, and references. Image files are kept.")
+                    delete_character_btn = gr.Button("Delete Character records", variant="stop")
+                entry_id = gr.Textbox(visible=False)
+                with gr.Group(visible=False) as generic_identity_group:
+                    generic_entry_id = gr.Textbox(label="Backdrop name", placeholder="e.g. MASTER:farm_field",
+                                                   info="Use a stable backdrop ID for this recurring place.")
+                    generic_entry_id.change(lambda value: value, inputs=generic_entry_id, outputs=entry_id)
+                with gr.Row():
+                    beat = gr.Textbox(label="Section / beat (optional)", placeholder="e.g. The Storm, or Beat 3")
+                    reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHAR:alistair_pig, or MASTER:ship_deck")
+                description = gr.Textbox(label="Working description (optional)", lines=2,
+                                          placeholder="For your own reference only, e.g. Alistair facing camera in his everyday tweed")
+                with gr.Group(visible=True) as panel_group:
+                    gr.HTML('<div class="stage-guide"><strong>Choose a stage.</strong> Start with <strong>Concept (mashup)</strong>: use your references and prompts to lock the canonical design. Use <strong>Sheet panel</strong> only after that, to make consistent turnarounds, expressions, and details from the locked concept.</div>')
+                    with gr.Row():
+                        build_stage = gr.Radio(label="Build stage", choices=[CONCEPT_STAGE, PANEL_STAGE], value=CONCEPT_STAGE, scale=2)
+                        concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1, height=120)
+                    panel_key = gr.Dropdown(label="Sheet panel", choices=[panel["key"] for panel in composer.get_template("CHAR")], value="fullbody_front", visible=False)
+                    panel_status = gr.Markdown("")
+                    with gr.Accordion("Reference images — add a mood board", open=True):
+                        gr.Markdown("Upload visual references before creating the concept. They are retained with the character record for continuity; this version does not send them into the generator automatically.")
+                        with gr.Row():
+                            ref_file = gr.File(label="Upload a reference image", file_types=["image"])
+                            ref_note = gr.Textbox(label="What should this reference contribute?", placeholder="e.g. jacket silhouette, color palette, attitude")
+                        ref_add_btn = gr.Button("Add reference")
+                        ref_status = gr.Markdown("")
+                        ref_gallery = gr.Gallery(label="Character reference board", columns=4, height=200)
 
             with gr.Group(elem_classes=["step-card", "step-2"]):
-                with gr.Row():
-                    comfyui_url = gr.Textbox(label="ComfyUI URL", value=CFG.comfyui_url,
-                                              info="Where ComfyUI is running.", scale=9)
-                    url_btn = gr.Button("❓", scale=0, min_width=36, size="sm", elem_classes=["help-btn"])
-                url_help = gr.Markdown(
-                    "If ComfyUI is running on this same computer, the default "
-                    "`http://127.0.0.1:8188` is almost always correct. On another "
-                    "machine, use that machine's IP, e.g. `http://192.168.1.20:8188`.",
-                    visible=False, elem_classes=["help-panel"])
-                url_state = gr.State(False)
-                url_btn.click(_toggle_help, inputs=url_state, outputs=[url_state, url_help])
+                gr.Markdown("#### Step 3 — Prompt the image or video model")
+                prompt_positive = gr.Textbox(label="Positive prompt", lines=3,
+                    placeholder="Describe subject, wardrobe, pose, composition, style, lighting, and continuity.")
+                prompt_negative = gr.Textbox(label="Negative prompt (optional)", lines=2,
+                    placeholder="Describe failures to avoid: anatomy errors, unwanted style, wrong wardrobe, text, etc.")
+                with gr.Accordion("Draft prompt brief — copy into your preferred AI assistant", open=False):
+                    gr.Markdown("No API call is made. This formats your current character and prompt information into a model-aware brief for you to paste into the AI model of your choice.")
+                    target_model = gr.Dropdown(label="Intended generation target", choices=["ComfyUI image workflow", "Wan image-to-video", "LTX-Video", "Flux", "Generic image/video model"], value="ComfyUI image workflow")
+                    draft_prompt_btn = gr.Button("Draft copyable prompt brief")
+                    prompt_brief = gr.Textbox(label="Copy this into your preferred AI assistant", lines=14, interactive=False)
 
-                gr.Markdown(
-                    "In ComfyUI, build and test your image workflow, then use "
-                    "**Save (API Format)** to export it as a `.json` file, and "
-                    "upload it below."
+            with gr.Group(elem_classes=["step-card", "step-3"]):
+                gr.Markdown("#### Step 3 — Roll camera")
+                with gr.Row():
+                    base_seed = gr.Number(label="Seed (leave blank for random)", value=None)
+                    n_variants = gr.Slider(label="How many takes", minimum=1, maximum=8, step=1, value=4)
+                gen_btn = gr.Button("🎬 Action!", variant="primary")
+                gallery = gr.Gallery(label="The takes — each one labeled with its seed", columns=4)
+                gen_status = gr.HTML("")
+                gen_btn.click(
+                    generate_click_ui,
+                    inputs=[entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
+                            base_seed, n_variants],
+                    outputs=[gallery, gen_status],
                 )
-                workflow_file = gr.File(label="Workflow file", file_types=[".json"])
 
-                gr.Markdown("**Which part of the workflow does what?**")
+            with gr.Group(elem_classes=["step-card", "step-4"]):
+                gr.Markdown(
+                    "#### Step 4 — Review the dailies\n"
+                    "Click a take above to see it larger, then copy its file path and "
+                    "seed into the two boxes below."
+                )
                 with gr.Row():
-                    pos_node = gr.Textbox(label="Prompt (positive) node ID",
-                                           value=CFG.node_mapping.positive_prompt_node, info="e.g. '6'")
-                    pos_input = gr.Textbox(label="...field name on that node",
-                                            value=CFG.node_mapping.positive_prompt_input, info="Usually 'text'")
-                with gr.Row():
-                    neg_node = gr.Textbox(label="What-to-avoid node ID",
-                                           value=CFG.node_mapping.negative_prompt_node)
-                    neg_input = gr.Textbox(label="...field name on that node",
-                                            value=CFG.node_mapping.negative_prompt_input)
-                with gr.Row():
-                    seed_node = gr.Textbox(label="Seed node ID", value=CFG.node_mapping.seed_node)
-                    seed_input = gr.Textbox(label="...field name on that node",
-                                             value=CFG.node_mapping.seed_input)
+                    winner_path = gr.Textbox(label="Winning take's file path")
+                    winner_seed = gr.Number(label="Winning take's seed")
+                note = gr.Textbox(
+                    label="Why this take? (saved permanently with the record)", lines=2,
+                    placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
+                )
 
-        with gr.Group(elem_classes=["step-card", "step-3"]):
-            storyboard_path = gr.Textbox(
-                label="Where should locked images be recorded?",
-                value=CFG.storyboard_path, info="A spreadsheet file, created automatically.",
+            with gr.Group(elem_classes=["step-card", "step-5"]):
+                gr.Markdown("#### Step 5 — Print the take")
+                lock_btn = gr.Button("🎞️ Print it", variant="primary")
+                lock_status = gr.HTML("")
+                lock_btn.click(
+                    lock_click_ui,
+                    inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, reused_from, prompt_positive,
+                            prompt_negative, winner_path, winner_seed, note],
+                    outputs=lock_status,
+                ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+
+            # --- CHAR / MASTER only: composite sheet rendering ---
+            with gr.Group(visible=True, elem_classes=["step-card", "step-6"]) as composite_group:
+                gr.Markdown(
+                    "#### Step 6 — Assemble the reel\n"
+                    "Puts every printed panel together into one composite reference sheet. "
+                    "You can preview it at any point — panels you haven't printed "
+                    "yet just show as a placeholder."
+                )
+                render_btn = gr.Button("Preview the reel")
+                composite_image = gr.Image(label="Composite sheet preview", type="filepath")
+                render_status = gr.Markdown("")
+                render_btn.click(render_composite_preview, inputs=[entry_id, entry_type],
+                                  outputs=[composite_image, render_status])
+
+                sheet_note = gr.Textbox(label="Note for this sheet version", lines=1,
+                                         placeholder="e.g. 'first full pass, 9/13 panels'")
+                save_sheet_btn = gr.Button("🎞️ Print the reel", variant="primary")
+                save_sheet_status = gr.HTML("")
+                save_sheet_btn.click(save_composite_ui_html, inputs=[entry_id, entry_type, composite_image, sheet_note],
+                                      outputs=save_sheet_status)
+
+            # --- Wiring for entry_type / stage / panel context awareness ---
+            entry_type.change(on_entry_type_change, inputs=entry_type,
+                               outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner, generic_entry_id])
+            build_preset.change(apply_build_preset, inputs=build_preset,
+                                outputs=[entry_type, entry_id, description, prompt_positive, prompt_negative, beat, reused_from])
+            character_select.change(select_character_ui, inputs=character_select,
+                                    outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
+                refresh_references, inputs=entry_id, outputs=ref_gallery).then(
+                concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+            new_trigger.change(character_trigger_preview, inputs=new_trigger, outputs=trigger_preview)
+            create_character_btn.click(create_character_ui, inputs=[new_trigger, new_display_name, new_working_note],
+                                       outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                                new_trigger, new_display_name, new_working_note, character_status])
+            save_character_btn.click(save_character_ui, inputs=[entry_id, character_display_name, character_working_note],
+                                     outputs=[character_select, character_status])
+            rename_character_btn.click(rename_character_ui, inputs=[entry_id, rename_trigger],
+                                       outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                                rename_trigger, character_status])
+            delete_character_btn.click(delete_character_ui, inputs=[entry_id, delete_confirmation],
+                                       outputs=[character_select, entry_id, character_display_name, character_working_note,
+                                                character_status])
+            ref_add_btn.click(add_reference_ui, inputs=[entry_id, ref_file, ref_note], outputs=[ref_status, ref_gallery])
+            draft_prompt_btn.click(draft_prompt_brief,
+                                   inputs=[target_model, entry_id, character_display_name, character_working_note, prompt_positive, prompt_negative],
+                                   outputs=prompt_brief)
+            build_stage.change(on_build_stage_change, inputs=build_stage, outputs=panel_key)
+            entry_id.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
+                             outputs=[prompt_positive, prompt_negative, panel_status])
+            build_stage.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
+                                outputs=[prompt_positive, prompt_negative, panel_status])
+            panel_key.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
+                              outputs=[prompt_positive, prompt_negative, panel_status])
+            entry_id.change(refresh_references, inputs=entry_id, outputs=ref_gallery)
+            entry_id.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+            entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
+
+        with gr.Tab("🧭 Harry the Advisor", id="harry"):
+            harry_icon = (f'<img src="{UI_IMAGES["tab_icon_harry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                         if UI_IMAGES["tab_icon_harry"] else "🎬 ")
+            gr.HTML(
+                f'<h2 style="display:flex;align-items:center;">{harry_icon}Harry — your assistant director</h2>'
             )
-            gr.Markdown("#### Harry the Advisor provider")
-            harry_provider = gr.Dropdown(label="Advisor model provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider,
-                                         info="Claude is the default. Azure OpenAI reuses the local OpenScout Azure configuration and its environment key.")
-            harry_provider_note = gr.Markdown(harry.provider_status(CFG.harry_provider))
-            harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
-
-        setup_status = gr.Markdown("")
-        setup_save_event = gr.Button("Save Setup", variant="primary").click(
-            setup_save,
-            inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
-                    seed_node, seed_input, storyboard_path, mock_mode, harry_provider],
-            outputs=setup_status,
-        )
-
-    with gr.Tab("🛠️ Build"):
-        build_icon = (f'<img src="{UI_IMAGES["tab_icon_build"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
-                     if UI_IMAGES["tab_icon_build"] else "🎥 ")
-        gr.HTML(f'<h2 style="display:flex;align-items:center;">{build_icon}On set</h2>')
-        gr.Markdown(
-            "Every scene starts here. Work the slate top to bottom — nothing "
-            "makes it into the final reel until you **print the take**."
-        )
-        build_context_banner = gr.HTML(build_context("CHAR"))
-        with gr.Group(elem_classes=["step-card", "step-1"]):
-            build_preset = gr.Dropdown(label="Start from a Harry-approved draft (optional)", choices=harry.preset_choices(), value=None,
-                                       info="This fills Build fields from an approved draft. It does not create or lock an asset.")
-            build_checklist = gr.CheckboxGroup(label="Harry prep checklist", choices=harry.checklist_choices(), value=[],
-                                                info="Tick artifacts as you complete them. This is a working checklist; locking remains the permanent record.")
-
-        with gr.Group(elem_classes=["step-card", "step-1"]):
-            gr.Markdown("#### Step 1 — Choose what you are building")
-            entry_type = gr.Dropdown(label="What are you building?", choices=BUILD_TYPE_CHOICES, value="CHAR",
-                                     info="Choose this first. The identity, references, and workflow below change for Character, Backdrop, Prop, or Shot.")
-            gr.Markdown("#### Step 2 — Name it and add references")
-            with gr.Group(elem_classes=["character-manager"]) as character_manager:
-                gr.Markdown("**Create a Character**")
-                gr.Markdown("The character name below automatically becomes its permanent LoRA and prompt trigger. You do not need to type `CHAR:`.")
-                with gr.Row():
-                    new_trigger = gr.Textbox(label="Character name for the trigger", placeholder="e.g. wilbur_the_pig")
-                    new_display_name = gr.Textbox(label="Display name", placeholder="e.g. Wilbur the Pig")
-                trigger_preview = gr.HTML(character_trigger_preview(""))
-                new_working_note = gr.Textbox(label="Working continuity note", lines=2,
-                                               placeholder="e.g. practical Victorian country gentleman; tweed cap, waistcoat, calm and capable")
-                create_character_btn = gr.Button("Create and lock character", variant="primary")
-                character_status = gr.Markdown("")
-                gr.Markdown("---\n**Choose or manage an existing Character**")
-                character_select = gr.Dropdown(label="Existing Character", choices=character_choices(), value=None,
-                                               info="Select a character after it has been created.")
-                with gr.Row():
-                    character_display_name = gr.Textbox(label="Selected display name")
-                    character_working_note = gr.Textbox(label="Selected continuity note", lines=2)
-                with gr.Row():
-                    save_character_btn = gr.Button("Save character details")
-                    rename_trigger = gr.Textbox(label="New character name for the trigger", placeholder="e.g. wilbur_the_pig")
-                    rename_character_btn = gr.Button("Rename character trigger")
-                delete_confirmation = gr.Checkbox(label="I understand deletion removes this Character's registry records, concepts, panels, and references. Image files are kept.")
-                delete_character_btn = gr.Button("Delete Character records", variant="stop")
-            entry_id = gr.Textbox(visible=False)
-            with gr.Group(visible=False) as generic_identity_group:
-                generic_entry_id = gr.Textbox(label="Backdrop name", placeholder="e.g. MASTER:farm_field",
-                                               info="Use a stable backdrop ID for this recurring place.")
-                generic_entry_id.change(lambda value: value, inputs=generic_entry_id, outputs=entry_id)
-            with gr.Row():
-                beat = gr.Textbox(label="Section / beat (optional)", placeholder="e.g. The Storm, or Beat 3")
-                reused_from = gr.Textbox(label="Chained from (optional)", placeholder="e.g. 1.1, CHAR:alistair_pig, or MASTER:ship_deck")
-            description = gr.Textbox(label="Working description (optional)", lines=2,
-                                      placeholder="For your own reference only, e.g. Alistair facing camera in his everyday tweed")
-            with gr.Group(visible=True) as panel_group:
-                gr.HTML('<div class="stage-guide"><strong>Choose a stage.</strong> Start with <strong>Concept (mashup)</strong>: use your references and prompts to lock the canonical design. Use <strong>Sheet panel</strong> only after that, to make consistent turnarounds, expressions, and details from the locked concept.</div>')
-                with gr.Row():
-                    build_stage = gr.Radio(label="Build stage", choices=[CONCEPT_STAGE, PANEL_STAGE], value=CONCEPT_STAGE, scale=2)
-                    concept_thumb = gr.Image(label="Locked concept", interactive=False, scale=1, height=120)
-                panel_key = gr.Dropdown(label="Sheet panel", choices=[panel["key"] for panel in composer.get_template("CHAR")], value="fullbody_front", visible=False)
-                panel_status = gr.Markdown("")
-                with gr.Accordion("Reference images — add a mood board", open=True):
-                    gr.Markdown("Upload visual references before creating the concept. They are retained with the character record for continuity; this version does not send them into the generator automatically.")
-                    with gr.Row():
-                        ref_file = gr.File(label="Upload a reference image", file_types=["image"])
-                        ref_note = gr.Textbox(label="What should this reference contribute?", placeholder="e.g. jacket silhouette, color palette, attitude")
-                    ref_add_btn = gr.Button("Add reference")
-                    ref_status = gr.Markdown("")
-                    ref_gallery = gr.Gallery(label="Character reference board", columns=4, height=200)
-
-        with gr.Group(elem_classes=["step-card", "step-2"]):
-            gr.Markdown("#### Step 3 — Prompt the image or video model")
-            prompt_positive = gr.Textbox(label="Positive prompt", lines=3,
-                placeholder="Describe subject, wardrobe, pose, composition, style, lighting, and continuity.")
-            prompt_negative = gr.Textbox(label="Negative prompt (optional)", lines=2,
-                placeholder="Describe failures to avoid: anatomy errors, unwanted style, wrong wardrobe, text, etc.")
-            with gr.Accordion("Draft prompt brief — copy into your preferred AI assistant", open=False):
-                gr.Markdown("No API call is made. This formats your current character and prompt information into a model-aware brief for you to paste into the AI model of your choice.")
-                target_model = gr.Dropdown(label="Intended generation target", choices=["ComfyUI image workflow", "Wan image-to-video", "LTX-Video", "Flux", "Generic image/video model"], value="ComfyUI image workflow")
-                draft_prompt_btn = gr.Button("Draft copyable prompt brief")
-                prompt_brief = gr.Textbox(label="Copy this into your preferred AI assistant", lines=14, interactive=False)
-
-        with gr.Group(elem_classes=["step-card", "step-3"]):
-            gr.Markdown("#### Step 3 — Roll camera")
-            with gr.Row():
-                base_seed = gr.Number(label="Seed (leave blank for random)", value=None)
-                n_variants = gr.Slider(label="How many takes", minimum=1, maximum=8, step=1, value=4)
-            gen_btn = gr.Button("🎬 Action!", variant="primary")
-            gallery = gr.Gallery(label="The takes — each one labeled with its seed", columns=4)
-            gen_status = gr.HTML("")
-            gen_btn.click(
-                generate_click_ui,
-                inputs=[entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
-                        base_seed, n_variants],
-                outputs=[gallery, gen_status],
-            )
-
-        with gr.Group(elem_classes=["step-card", "step-4"]):
             gr.Markdown(
-                "#### Step 4 — Review the dailies\n"
-                "Click a take above to see it larger, then copy its file path and "
-                "seed into the two boxes below."
+                "Every production needs a first AD to read the script and build the "
+                "call sheet before the director steps on set. That's Harry. Bring "
+                "him the script, story, poem, or narration; he proposes the "
+                "production prep list; you edit and approve it before it becomes "
+                "Build presets."
             )
-            with gr.Row():
-                winner_path = gr.Textbox(label="Winning take's file path")
-                winner_seed = gr.Number(label="Winning take's seed")
-            note = gr.Textbox(
-                label="Why this take? (saved permanently with the record)", lines=2,
-                placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
+            with gr.Group(elem_classes=["step-card", "step-1"]):
+                harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
+                gr.HTML('<div class="harry-intake"><strong>Choose one source route:</strong> <strong>Option A — attach a text document</strong>, <strong>Option B — paste text</strong>, or <strong>Option C — attach narration audio</strong> and transcribe it locally. You may combine them when useful.</div>')
+                with gr.Row():
+                    with gr.Group(elem_classes=["harry-source-option"]):
+                        gr.Markdown("**Option A — Attach text**\n\nAttach a `.txt`, `.md`, `.docx`, or `.pdf` script, story, poem, or treatment. Load it into the text area to review before Harry reads it.")
+                        harry_text_file = gr.File(label="Text document", file_types=[".txt", ".md", ".docx", ".pdf"])
+                        harry_extract_btn = gr.Button("Load attached text")
+                    with gr.Group(elem_classes=["harry-source-option"]):
+                        gr.Markdown("**Option B — Paste text**\n\nPaste a script, story, poem, narration, or treatment directly.")
+                        harry_source = gr.Textbox(label="Written source text", lines=14, placeholder="Paste your script, story, poem, or narration here…")
+                    with gr.Group(elem_classes=["harry-source-option"]):
+                        gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before Harry reads it.")
+                        harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
+                        harry_transcribe_btn = gr.Button("Transcribe audio locally")
+                harry_save_btn = gr.Button("Save current source to project library")
+                harry_source_id = gr.State("")
+                harry_source_status = gr.Markdown("")
+                harry_reset_btn = gr.Button("↩ Start over (clear this source)")
+            with gr.Group(elem_classes=["step-card", "step-2"]):
+                gr.Markdown("#### Ask Harry for the call sheet")
+                harry_provider_run = gr.Dropdown(label="Provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider)
+                harry_privacy = gr.Markdown(harry.provider_status(CFG.harry_provider))
+                harry_provider_run.change(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
+                setup_save_event.then(lambda: gr.update(value=CFG.harry_provider), outputs=harry_provider_run)
+                setup_save_event.then(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
+                harry_run_btn = gr.Button("Ask Harry for recommendations", variant="primary")
+                harry_status = gr.HTML("")
+                harry_summary = gr.Textbox(label="Harry's read on the production", lines=4, interactive=False)
+                harry_questions = gr.Textbox(label="Only if essential: Harry's clarification questions", lines=3, interactive=False)
+            with gr.Group(elem_classes=["step-card", "step-3"]):
+                gr.Markdown("#### Review, refine, and approve the call sheet\nUntick anything you do not want. Every field is editable. Approving creates Build presets only; it does not print any takes.")
+                harry_plan = gr.State({})
+                harry_table = gr.Dataframe(headers=["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note", "Positive prompt", "Negative prompt", "Beat", "Chained from"],
+                                          datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
+                harry_apply_btn = gr.Button("Approve call sheet → send to Build", variant="primary")
+                harry_apply_status = gr.HTML("")
+                harry_goto_build_btn = gr.Button("🎬 Go to Build →")
+            # Attaching a document should load it right away, not require a
+            # separate manual click before it's usable -- the button stays too,
+            # for re-loading after swapping the attached file.
+            harry_text_file.upload(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
+            harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
+            harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
+            harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
+            harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file],
+                                outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
+            harry_apply_btn.click(harry_apply_drafts_ui, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
+            harry_goto_build_btn.click(lambda: gr.Tabs(selected="build"), outputs=main_tabs)
+            harry_reset_btn.click(
+                harry_start_over,
+                outputs=[harry_title, harry_source, harry_text_file, harry_audio, harry_source_id,
+                         harry_plan, harry_summary, harry_questions, harry_table,
+                         harry_source_status, harry_status, harry_apply_status],
             )
 
-        with gr.Group(elem_classes=["step-card", "step-5"]):
-            gr.Markdown("#### Step 5 — Print the take")
-            lock_btn = gr.Button("🎞️ Print it", variant="primary")
-            lock_status = gr.HTML("")
-            lock_btn.click(
-                lock_click_ui,
-                inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, reused_from, prompt_positive,
-                        prompt_negative, winner_path, winner_seed, note],
-                outputs=lock_status,
-            ).then(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
-
-        # --- CHAR / MASTER only: composite sheet rendering ---
-        with gr.Group(visible=True, elem_classes=["step-card", "step-6"]) as composite_group:
+        with gr.Tab("📋 Registry", id="registry"):
+            registry_icon = (f'<img src="{UI_IMAGES["tab_icon_registry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                             if UI_IMAGES["tab_icon_registry"] else "🎞️ ")
+            gr.HTML(f'<h2 style="display:flex;align-items:center;">{registry_icon}The screening room</h2>')
             gr.Markdown(
-                "#### Step 6 — Assemble the reel\n"
-                "Puts every printed panel together into one composite reference sheet. "
-                "You can preview it at any point — panels you haven't printed "
-                "yet just show as a placeholder."
+                "Every take you've printed. Locking a new version of something "
+                "you've already named updates that entry and adds your new note "
+                "underneath the old one — it won't duplicate. The Chained from "
+                "column records continuity with an earlier locked shot or asset."
             )
-            render_btn = gr.Button("Preview the reel")
-            composite_image = gr.Image(label="Composite sheet preview", type="filepath")
-            render_status = gr.Markdown("")
-            render_btn.click(render_composite_preview, inputs=[entry_id, entry_type],
-                              outputs=[composite_image, render_status])
+            refresh_btn = gr.Button("Refresh")
+            registry_empty = gr.HTML(visible=False)
+            registry_table = gr.Dataframe(
+                headers=["Name", "Type", "Section", "Chained from", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
+                interactive=False,
+            )
+            refresh_btn.click(registry_refresh, outputs=registry_table).then(registry_empty_state, outputs=registry_empty)
+            demo.load(registry_refresh, outputs=registry_table)
+            demo.load(registry_empty_state, outputs=registry_empty)
 
-            sheet_note = gr.Textbox(label="Note for this sheet version", lines=1,
-                                     placeholder="e.g. 'first full pass, 9/13 panels'")
-            save_sheet_btn = gr.Button("🎞️ Print the reel", variant="primary")
-            save_sheet_status = gr.HTML("")
-            save_sheet_btn.click(save_composite_ui_html, inputs=[entry_id, entry_type, composite_image, sheet_note],
-                                  outputs=save_sheet_status)
+            gr.Markdown("#### 🖼️ Character, backdrop & prop sheets")
+            sheets_refresh_btn = gr.Button("Refresh sheets")
+            sheets_empty = gr.HTML(visible=False)
+            sheets_gallery = gr.Gallery(label="Rendered composite sheets", columns=3, height=300)
+            sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery).then(sheets_empty_state, outputs=sheets_empty)
+            demo.load(sheets_gallery_refresh, outputs=sheets_gallery)
+            demo.load(sheets_empty_state, outputs=sheets_empty)
 
-        # --- Wiring for entry_type / stage / panel context awareness ---
-        entry_type.change(on_entry_type_change, inputs=entry_type,
-                           outputs=[character_manager, generic_identity_group, panel_key, panel_group, composite_group, build_stage, build_context_banner, generic_entry_id])
-        build_preset.change(apply_build_preset, inputs=build_preset,
-                            outputs=[entry_type, entry_id, description, prompt_positive, prompt_negative, beat, reused_from])
-        character_select.change(select_character_ui, inputs=character_select,
-                                outputs=[entry_id, character_display_name, character_working_note, character_status]).then(
-            refresh_references, inputs=entry_id, outputs=ref_gallery).then(
-            concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
-        new_trigger.change(character_trigger_preview, inputs=new_trigger, outputs=trigger_preview)
-        create_character_btn.click(create_character_ui, inputs=[new_trigger, new_display_name, new_working_note],
-                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
-                                            new_trigger, new_display_name, new_working_note, character_status])
-        save_character_btn.click(save_character_ui, inputs=[entry_id, character_display_name, character_working_note],
-                                 outputs=[character_select, character_status])
-        rename_character_btn.click(rename_character_ui, inputs=[entry_id, rename_trigger],
-                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
-                                            rename_trigger, character_status])
-        delete_character_btn.click(delete_character_ui, inputs=[entry_id, delete_confirmation],
-                                   outputs=[character_select, entry_id, character_display_name, character_working_note,
-                                            character_status])
-        ref_add_btn.click(add_reference_ui, inputs=[entry_id, ref_file, ref_note], outputs=[ref_status, ref_gallery])
-        draft_prompt_btn.click(draft_prompt_brief,
-                               inputs=[target_model, entry_id, character_display_name, character_working_note, prompt_positive, prompt_negative],
-                               outputs=prompt_brief)
-        build_stage.change(on_build_stage_change, inputs=build_stage, outputs=panel_key)
-        entry_id.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
-                         outputs=[prompt_positive, prompt_negative, panel_status])
-        build_stage.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
-                            outputs=[prompt_positive, prompt_negative, panel_status])
-        panel_key.change(load_panel_context, inputs=[entry_id, entry_type, build_stage, panel_key],
-                          outputs=[prompt_positive, prompt_negative, panel_status])
-        entry_id.change(refresh_references, inputs=entry_id, outputs=ref_gallery)
-        entry_id.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
-        entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
-
-    with gr.Tab("🧭 Harry the Advisor"):
-        harry_icon = (f'<img src="{UI_IMAGES["tab_icon_harry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
-                     if UI_IMAGES["tab_icon_harry"] else "🎬 ")
-        gr.HTML(
-            f'<h2 style="display:flex;align-items:center;">{harry_icon}Harry — your assistant director</h2>'
-        )
-        gr.Markdown(
-            "Every production needs a first AD to read the script and build the "
-            "call sheet before the director steps on set. That's Harry. Bring "
-            "him the script, story, poem, or narration; he proposes the "
-            "production prep list; you edit and approve it before it becomes "
-            "Build presets."
-        )
-        with gr.Group(elem_classes=["step-card", "step-1"]):
-            harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
-            gr.HTML('<div class="harry-intake"><strong>Choose one source route:</strong> <strong>Option A — attach a text document</strong>, <strong>Option B — paste text</strong>, or <strong>Option C — attach narration audio</strong> and transcribe it locally. You may combine them when useful.</div>')
+            gr.Markdown(
+                "#### ⏱️ Beat timing\n"
+                "Import a beats JSON (either the word-count first-pass estimate, or "
+                "real word-level timing from a forced-alignment run against the "
+                "narration audio) — this replaces whatever was there before, since "
+                "beat timing is recomputed as a whole rather than edited beat by beat."
+            )
             with gr.Row():
-                with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option A — Attach text**\n\nAttach a `.txt`, `.md`, `.docx`, or `.pdf` script, story, poem, or treatment. Load it into the text area to review before Harry reads it.")
-                    harry_text_file = gr.File(label="Text document", file_types=[".txt", ".md", ".docx", ".pdf"])
-                    harry_extract_btn = gr.Button("Load attached text")
-                with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option B — Paste text**\n\nPaste a script, story, poem, narration, or treatment directly.")
-                    harry_source = gr.Textbox(label="Written source text", lines=14, placeholder="Paste your script, story, poem, or narration here…")
-                with gr.Group(elem_classes=["harry-source-option"]):
-                    gr.Markdown("**Option C — Attach audio**\n\nAttach narration when no written text is available, then transcribe it locally. Review the transcription before Harry reads it.")
-                    harry_audio = gr.File(label="Narration audio file", file_types=["audio"])
-                    harry_transcribe_btn = gr.Button("Transcribe audio locally")
-            harry_save_btn = gr.Button("Save current source to project library")
-            harry_source_id = gr.State("")
-            harry_source_status = gr.Markdown("")
-            harry_reset_btn = gr.Button("↩ Start over (clear this source)")
-        with gr.Group(elem_classes=["step-card", "step-2"]):
-            gr.Markdown("#### Ask Harry for the call sheet")
-            harry_provider_run = gr.Dropdown(label="Provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider)
-            harry_privacy = gr.Markdown(harry.provider_status(CFG.harry_provider))
-            harry_provider_run.change(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
-            setup_save_event.then(lambda: gr.update(value=CFG.harry_provider), outputs=harry_provider_run)
-            setup_save_event.then(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
-            harry_run_btn = gr.Button("Ask Harry for recommendations", variant="primary")
-            harry_status = gr.HTML("")
-            harry_summary = gr.Textbox(label="Harry's read on the production", lines=4, interactive=False)
-            harry_questions = gr.Textbox(label="Only if essential: Harry's clarification questions", lines=3, interactive=False)
-        with gr.Group(elem_classes=["step-card", "step-3"]):
-            gr.Markdown("#### Review, refine, and approve the call sheet\nUntick anything you do not want. Every field is editable. Approving creates Build presets only; it does not print any takes.")
-            harry_plan = gr.State({})
-            harry_table = gr.Dataframe(headers=["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note", "Positive prompt", "Negative prompt", "Beat", "Chained from"],
-                                      datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
-            harry_apply_btn = gr.Button("Approve call sheet → send to Build", variant="primary")
-            harry_apply_status = gr.HTML("")
-        # Attaching a document should load it right away, not require a
-        # separate manual click before it's usable -- the button stays too,
-        # for re-loading after swapping the attached file.
-        harry_text_file.upload(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
-        harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
-        harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
-        harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
-        harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file],
-                            outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
-        harry_apply_btn.click(harry_apply_drafts_ui, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
-        harry_reset_btn.click(
-            harry_start_over,
-            outputs=[harry_title, harry_source, harry_text_file, harry_audio, harry_source_id,
-                     harry_plan, harry_summary, harry_questions, harry_table,
-                     harry_source_status, harry_status, harry_apply_status],
-        )
+                beats_file = gr.File(label="Beats JSON", file_types=[".json"])
+                beats_import_btn = gr.Button("Import")
+            beats_status = gr.Markdown("")
+            beats_empty = gr.HTML(visible=False)
+            beats_table = gr.Dataframe(
+                headers=["#", "Beat", "Start (s)", "End (s)", "Duration (s)", "Source", "Notes"],
+                interactive=False,
+            )
+            beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table]).then(
+                beats_empty_state, outputs=beats_empty)
+            demo.load(beats_table_refresh, outputs=beats_table)
+            demo.load(beats_empty_state, outputs=beats_empty)
 
-    with gr.Tab("📋 Registry"):
-        registry_icon = (f'<img src="{UI_IMAGES["tab_icon_registry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
-                         if UI_IMAGES["tab_icon_registry"] else "🎞️ ")
-        gr.HTML(f'<h2 style="display:flex;align-items:center;">{registry_icon}The screening room</h2>')
-        gr.Markdown(
-            "Every take you've printed. Locking a new version of something "
-            "you've already named updates that entry and adds your new note "
-            "underneath the old one — it won't duplicate. The Chained from "
-            "column records continuity with an earlier locked shot or asset."
-        )
-        refresh_btn = gr.Button("Refresh")
-        registry_empty = gr.HTML(visible=False)
-        registry_table = gr.Dataframe(
-            headers=["Name", "Type", "Section", "Chained from", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
-            interactive=False,
-        )
-        refresh_btn.click(registry_refresh, outputs=registry_table).then(registry_empty_state, outputs=registry_empty)
-        demo.load(registry_refresh, outputs=registry_table)
-        demo.load(registry_empty_state, outputs=registry_empty)
-
-        gr.Markdown("#### 🖼️ Character, backdrop & prop sheets")
-        sheets_refresh_btn = gr.Button("Refresh sheets")
-        sheets_empty = gr.HTML(visible=False)
-        sheets_gallery = gr.Gallery(label="Rendered composite sheets", columns=3, height=300)
-        sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery).then(sheets_empty_state, outputs=sheets_empty)
-        demo.load(sheets_gallery_refresh, outputs=sheets_gallery)
-        demo.load(sheets_empty_state, outputs=sheets_empty)
-
-        gr.Markdown(
-            "#### ⏱️ Beat timing\n"
-            "Import a beats JSON (either the word-count first-pass estimate, or "
-            "real word-level timing from a forced-alignment run against the "
-            "narration audio) — this replaces whatever was there before, since "
-            "beat timing is recomputed as a whole rather than edited beat by beat."
-        )
-        with gr.Row():
-            beats_file = gr.File(label="Beats JSON", file_types=[".json"])
-            beats_import_btn = gr.Button("Import")
-        beats_status = gr.Markdown("")
-        beats_empty = gr.HTML(visible=False)
-        beats_table = gr.Dataframe(
-            headers=["#", "Beat", "Start (s)", "End (s)", "Duration (s)", "Source", "Notes"],
-            interactive=False,
-        )
-        beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table]).then(
-            beats_empty_state, outputs=beats_empty)
-        demo.load(beats_table_refresh, outputs=beats_table)
-        demo.load(beats_empty_state, outputs=beats_empty)
 
 
     new_project_btn.click(lambda: gr.update(visible=True), outputs=new_project_group)
