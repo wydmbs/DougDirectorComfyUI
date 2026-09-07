@@ -222,10 +222,27 @@ def harry_analyze(provider, title, source_text, source_id, audio_file):
         return {}, "", "", [], "", f"⚠️ {error}"
 
 
-def harry_analyze_ui(provider, title, source_text, source_id, audio_file):
+def harry_analyze_ui(provider, title, source_text, source_id, audio_file, text_file):
+    # Defensive auto-fill: attaching a document or audio file and going
+    # straight to "Ask Harry" is the natural expectation -- don't make that
+    # a dead end just because the separate Load/Transcribe button wasn't
+    # clicked first. Only kicks in when the source box is actually empty.
+    prefix_status = ""
+    if not (source_text or "").strip():
+        if text_file is not None:
+            extracted, msg = harry_extract_text(text_file)
+            if isinstance(extracted, str) and extracted.strip():
+                source_text = extracted
+                prefix_status = msg + " "
+        elif audio_file is not None:
+            transcribed, msg = harry_transcribe(audio_file)
+            if isinstance(transcribed, str) and transcribed.strip():
+                source_text = transcribed
+                prefix_status = msg + " "
+
     plan, summary, questions, rows, new_source_id, status = harry_analyze(
         provider, title, source_text, source_id, audio_file)
-    return plan, summary, questions, rows, new_source_id, reward_card(status)
+    return plan, summary, questions, rows, new_source_id, source_text, reward_card(prefix_status + status)
 
 
 def harry_apply_drafts(rows, plan):
@@ -239,6 +256,26 @@ def harry_apply_drafts(rows, plan):
 def harry_apply_drafts_ui(rows, plan):
     preset_update, checklist_update, status = harry_apply_drafts(rows, plan)
     return preset_update, checklist_update, reward_card(status)
+
+
+def harry_start_over():
+    """Explicit exit path back to a blank Harry tab -- clears the title,
+    source text, both file attachments, and every downstream result,
+    without needing to reload the whole app."""
+    return (
+        "",              # harry_title
+        "",              # harry_source
+        None,            # harry_text_file
+        None,            # harry_audio
+        "",              # harry_source_id (State)
+        {},              # harry_plan (State)
+        "",              # harry_summary
+        "",              # harry_questions
+        [],              # harry_table
+        "",              # harry_source_status
+        "",              # harry_status
+        "",              # harry_apply_status
+    )
 
 
 def apply_build_preset(index):
@@ -1283,7 +1320,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
 
         setup_status = gr.Markdown("")
-        gr.Button("Save Setup", variant="primary").click(
+        setup_save_event = gr.Button("Save Setup", variant="primary").click(
             setup_save,
             inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
                     seed_node, seed_input, storyboard_path, mock_mode, harry_provider],
@@ -1499,11 +1536,14 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             harry_save_btn = gr.Button("Save current source to project library")
             harry_source_id = gr.State("")
             harry_source_status = gr.Markdown("")
+            harry_reset_btn = gr.Button("↩ Start over (clear this source)")
         with gr.Group(elem_classes=["step-card", "step-2"]):
             gr.Markdown("#### Ask Harry for the call sheet")
             harry_provider_run = gr.Dropdown(label="Provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider)
             harry_privacy = gr.Markdown(harry.provider_status(CFG.harry_provider))
             harry_provider_run.change(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
+            setup_save_event.then(lambda: gr.update(value=CFG.harry_provider), outputs=harry_provider_run)
+            setup_save_event.then(harry_provider_status, inputs=harry_provider_run, outputs=harry_privacy)
             harry_run_btn = gr.Button("Ask Harry for recommendations", variant="primary")
             harry_status = gr.HTML("")
             harry_summary = gr.Textbox(label="Harry's read on the production", lines=4, interactive=False)
@@ -1515,12 +1555,22 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                                       datatype=["bool", "str", "str", "str", "str", "str", "str", "str", "str", "str"], interactive=True, wrap=True)
             harry_apply_btn = gr.Button("Approve call sheet → send to Build", variant="primary")
             harry_apply_status = gr.HTML("")
+        # Attaching a document should load it right away, not require a
+        # separate manual click before it's usable -- the button stays too,
+        # for re-loading after swapping the attached file.
+        harry_text_file.upload(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
         harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
         harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
         harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
-        harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio],
-                            outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_status])
+        harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file],
+                            outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
         harry_apply_btn.click(harry_apply_drafts_ui, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
+        harry_reset_btn.click(
+            harry_start_over,
+            outputs=[harry_title, harry_source, harry_text_file, harry_audio, harry_source_id,
+                     harry_plan, harry_summary, harry_questions, harry_table,
+                     harry_source_status, harry_status, harry_apply_status],
+        )
 
     with gr.Tab("📋 Registry"):
         registry_icon = (f'<img src="{UI_IMAGES["tab_icon_registry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
