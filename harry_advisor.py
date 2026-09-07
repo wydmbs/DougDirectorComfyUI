@@ -21,35 +21,60 @@ def set_library_dir(path):
     LIBRARY_DIR = Path(path)
 OPENSCOUT_CONFIG = Path.home() / "OpenScout" / "openscout" / "config.yaml"
 
-SYSTEM_PROMPT = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
-Read the supplied script, story, poem, or narration transcript. Recommend the reusable preparation artifacts that will genuinely help production: characters, recurring props, recurring backdrops, and key shot/beat drafts.
+HARRY_PERSONA = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
+Read the supplied script, story, poem, or narration transcript."""
 
-SCENE/BEAT COVERAGE IS MANDATORY, NOT OPTIONAL:
-If the source text contains explicit section markers (bracketed headers like "< The Ship >", chapter titles, scene headings, or similarly clear structural breaks), treat each one as a beat and include at least one SHOT-kind item for every single marked section -- do not silently skip a marked section because it seems minor or because you are trying to keep the list short. A missing beat is a more serious omission than a slightly longer list. If the source has no explicit markers, infer a reasonable beat structure yourself (opening, rising action, climax, resolution, etc.) and still cover it with SHOT items.
+ITEM_SHAPE_NOTE = """Each item must have this exact shape:
+{
+  "kind": "%s",
+  "name": "human readable name",
+  "suggested_id": "%s",
+  "description": "what it is and why it matters",
+  "continuity_note": "visual or narrative continuity guidance",
+  "positive_prompt": "initial target-model-aware visual prompt",
+  "negative_prompt": "things to avoid",
+  "beat": "the story section this is introduced or most associated with",
+  "reused_from": "optional prior item id"
+}"""
 
-RECURRING PHYSICAL OBJECTS ARE PROPS OR MASTERS, EVEN WHEN DESCRIBED POETICALLY:
-A recurring object central to multiple beats (a vehicle, a vessel, a building, a key prop the characters interact with repeatedly) should get its own CHAR/MASTER/PROP entry even if the text never uses a single plain noun for it consistently -- reading "sail ship," "cargo hold," "the hull," and "a sleeping hulk" across a few lines is the same object described four ways, not four separate ideas, and it clearly warrants a PROP or MASTER entry. Do not require a single literal name to appear before recommending something the narrative obviously depends on.
-Separately, when the text implies a real-world object or mechanism the story logically requires but never actually mentions (e.g. characters are "moved from field to ship" with no vehicle named), you MAY suggest it as a tentative item, but mark its continuity_note as "inferred, not explicit in source -- confirm before locking" so the director knows it's a suggestion, not something read directly off the page.
+CHAR_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+
+TASK: identify ONLY the characters in the material -- do not identify backdrops, props, or shots in this pass; those come in separate passes. Do not invent named people without textual evidence.
 
 Return JSON only, with this exact shape:
-{
-  "summary": "short production reading",
+{{"items": [ {ITEM_SHAPE_NOTE % ('CHAR', 'CHAR:snake_case')} ]}}"""
+
+MASTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+
+TASK: identify ONLY recurring backdrops/locations in the material (kind "MASTER") -- do not identify characters, props, or shots in this pass; those are handled separately. You will be told which characters were already identified in an earlier pass, for context only.
+
+Return JSON only, with this exact shape:
+{{"items": [ {ITEM_SHAPE_NOTE % ('MASTER', 'MASTER:snake_case')} ]}}"""
+
+PROP_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+
+TASK: identify ONLY recurring key objects/props in the material (kind "PROP") -- do not identify characters, backdrops, or shots in this pass; those are handled separately. You will be told which characters and backdrops were already identified in earlier passes, for context only.
+
+RECURRING PHYSICAL OBJECTS ARE PROPS, EVEN WHEN DESCRIBED POETICALLY:
+A recurring object central to multiple beats (a vehicle, a vessel, a key object the characters interact with repeatedly) warrants its own PROP entry even if the text never uses a single plain noun for it consistently -- reading "sail ship," "cargo hold," "the hull," and "a sleeping hulk" across a few lines is the same object described four ways, not four separate ideas. Do not require one literal name to appear before recommending something the narrative obviously depends on.
+Separately, when the text implies a real-world object or mechanism the story logically requires but never actually states (e.g. characters are "moved from field to ship" with no vehicle named), you MAY suggest it as a tentative item, but mark its continuity_note as "inferred, not explicit in source -- confirm before locking" so the director knows it's a suggestion, not something read directly off the page.
+
+Return JSON only, with this exact shape:
+{{"items": [ {ITEM_SHAPE_NOTE % ('PROP', 'PROP:snake_case')} ]}}"""
+
+SHOT_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
+
+TASK: break the material into beats/scenes and produce shot drafts (kind "SHOT") -- one pass, focused entirely on scene coverage, since this is the task most likely to get shortchanged when asked alongside everything else. You will be told which characters, backdrops, and props were already identified in earlier passes -- reference them by name in shot descriptions/continuity notes for continuity, don't redefine them.
+
+SCENE/BEAT COVERAGE IS MANDATORY, NOT OPTIONAL:
+If the source text contains explicit section markers (bracketed headers like "< The Ship >", chapter titles, scene headings, or similarly clear structural breaks), treat each one as a beat and include at least one SHOT item for every single marked section -- do not silently skip a marked section because it seems minor or because you are trying to keep the list short. A missing beat is a more serious omission than a slightly longer list. If the source has no explicit markers, infer a reasonable beat structure yourself (opening, rising action, climax, resolution, etc.) and still cover it with SHOT items.
+
+Return JSON only, with this exact shape:
+{{
+  "summary": "short production reading of the whole piece",
   "questions": ["only essential clarification questions; empty when the material is clear"],
-  "items": [
-    {
-      "kind": "CHAR|MASTER|PROP|SHOT",
-      "name": "human readable name",
-      "suggested_id": "CHAR:snake_case|MASTER:snake_case|PROP:snake_case|beat.shot",
-      "description": "what it is and why it matters",
-      "continuity_note": "visual or narrative continuity guidance",
-      "positive_prompt": "initial target-model-aware visual prompt",
-      "negative_prompt": "things to avoid",
-      "beat": "the story section this belongs to -- required for every SHOT item, and for CHAR/MASTER/PROP items tie it to the beat where they're introduced",
-      "reused_from": "optional prior item id"
-    }
-  ]
-}
-Questions are exceptional: ask only when a decision materially changes the prep plan."""
+  "items": [ {ITEM_SHAPE_NOTE % ('SHOT', 'beat.shot, e.g. 1.1')} ]
+}}"""
 
 
 class HarryError(Exception):
@@ -98,7 +123,7 @@ def _request(url, headers, payload, timeout=120):
         raise HarryError(f"Could not reach the provider: {error.reason}") from error
 
 
-def _chat(provider, user_prompt):
+def _chat(provider, system_prompt, user_prompt):
     if provider == "Azure OpenAI":
         azure = _load_openscout_config().get("azure", {})
         key = os.environ.get(azure.get("api_key_env", "AZURE_FOUNDRY_API_KEY"))
@@ -107,7 +132,7 @@ def _chat(provider, user_prompt):
         endpoint = azure.get("endpoint", "").rstrip("/")
         url = f"{endpoint}/openai/v1/chat/completions"
         response = _request(url, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {
-            "model": azure.get("deployment"), "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 5000,
+            "model": azure.get("deployment"), "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 5000,
         })
         return response["choices"][0]["message"]["content"]
     if provider == "Claude":
@@ -116,7 +141,7 @@ def _chat(provider, user_prompt):
             raise HarryError("ANTHROPIC_API_KEY is not available to this app process.")
         response = _request("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, {
             "model": os.environ.get("HARRY_CLAUDE_MODEL", "claude-sonnet-4-5"), "max_tokens": 5000,
-            "system": SYSTEM_PROMPT, "messages": [{"role": "user", "content": user_prompt}],
+            "system": system_prompt, "messages": [{"role": "user", "content": user_prompt}],
         })
         return "".join(block.get("text", "") for block in response.get("content", []) if block.get("type") == "text")
     if provider == "OpenAI":
@@ -124,7 +149,7 @@ def _chat(provider, user_prompt):
         if not key:
             raise HarryError("OPENAI_API_KEY is not available to this app process.")
         response = _request("https://api.openai.com/v1/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {
-            "model": os.environ.get("HARRY_OPENAI_MODEL", "gpt-4.1"), "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "response_format": {"type": "json_object"},
+            "model": os.environ.get("HARRY_OPENAI_MODEL", "gpt-4.1"), "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "response_format": {"type": "json_object"},
         })
         return response["choices"][0]["message"]["content"]
     if provider == "Grok":
@@ -132,26 +157,27 @@ def _chat(provider, user_prompt):
         if not key:
             raise HarryError("XAI_API_KEY is not available to this app process.")
         response = _request("https://api.x.ai/v1/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {
-            "model": os.environ.get("HARRY_GROK_MODEL", "grok-3"), "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "response_format": {"type": "json_object"},
+            "model": os.environ.get("HARRY_GROK_MODEL", "grok-3"), "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "response_format": {"type": "json_object"},
         })
         return response["choices"][0]["message"]["content"]
     response = _request(os.environ.get("HARRY_OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat", {"Content-Type": "application/json"}, {
         "model": os.environ.get("HARRY_OLLAMA_MODEL", "qwen2.5:7b"), "stream": False,
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_prompt}], "format": "json",
+        "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "format": "json",
     })
     return response["message"]["content"]
 
 
-def _parse_plan(raw):
+def _parse_json_block(raw):
     fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.I)
     try:
-        plan = json.loads(fenced)
+        return json.loads(fenced)
     except json.JSONDecodeError as error:
         raise HarryError("Harry returned a response that was not valid JSON. Try again or choose another provider.") from error
-    if not isinstance(plan, dict) or not isinstance(plan.get("items"), list):
-        raise HarryError("Harry's response did not contain a usable recommendation list.")
+
+
+def _clean_items(raw_items):
     clean = []
-    for item in plan["items"]:
+    for item in raw_items or []:
         if not isinstance(item, dict) or item.get("kind") not in {"CHAR", "MASTER", "PROP", "SHOT"}:
             continue
         name = str(item.get("name") or "").strip()
@@ -166,10 +192,26 @@ def _parse_plan(raw):
             suggested = _slug(name) or "draft_shot"
         item["suggested_id"] = suggested
         clean.append({key: str(item.get(key) or "") for key in ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from")})
-    plan["items"] = clean
+    return clean
+
+
+def _parse_plan(raw):
+    plan = _parse_json_block(raw)
+    if not isinstance(plan, dict) or not isinstance(plan.get("items"), list):
+        raise HarryError("Harry's response did not contain a usable recommendation list.")
+    plan["items"] = _clean_items(plan["items"])
     plan["summary"] = str(plan.get("summary") or "")
     plan["questions"] = [str(question) for question in plan.get("questions", []) if str(question).strip()]
     return plan
+
+
+def _parse_items(raw):
+    """Same cleaning as _parse_plan, but for a stage call that returns only
+    {"items": [...]} with no summary/questions expected."""
+    data = _parse_json_block(raw)
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        raise HarryError("Harry's response did not contain a usable item list for this pass.")
+    return _clean_items(data["items"])
 
 
 def save_source(title, text, uploaded_path=None):
@@ -242,14 +284,81 @@ def transcribe_audio(audio_path):
     return result.get("text", "").strip()
 
 
+def _context_line(label, items):
+    if not items:
+        return f"{label}: none identified yet."
+    names = ", ".join(f"{item['name']} ({item['suggested_id']})" for item in items)
+    return f"{label}: {names}"
+
+
+def _run_stage(provider, system_prompt, user_prompt, stage_name, warnings):
+    """Runs one focused pass. A failure here doesn't abort the whole
+    analysis -- it's logged as a warning (surfaced to the director via the
+    questions list) and that stage simply contributes no items, so a
+    transient failure in, say, the props pass doesn't also cost the
+    characters and shots that already succeeded."""
+    try:
+        raw = _chat(provider, system_prompt, user_prompt)
+        return _parse_items(raw)
+    except HarryError as error:
+        warnings.append(f"⚠️ {stage_name} pass failed: {error}")
+        return []
+
+
 def analyze(provider, title, source_text, source_path="", uploaded_path=None):
     if not source_text.strip():
         raise HarryError("Paste script/story text, or transcribe the uploaded audio first.")
     if not source_path:
         source_path = save_source(title, source_text, uploaded_path).get("source_id", "")
     notice = "The source stays local." if provider == "Ollama" else f"The source text will be sent to {provider} for this analysis."
-    user_prompt = f"PROJECT TITLE: {title or 'Untitled project'}\n\nSOURCE:\n{source_text}\n\n{notice}\nReturn the JSON recommendation now."
-    plan = _parse_plan(_chat(provider, user_prompt))
+    base = f"PROJECT TITLE: {title or 'Untitled project'}\n\nSOURCE:\n{source_text}\n\n{notice}\n"
+
+    # Four separate, focused passes instead of one call trying to do
+    # everything at once. A single call asking for characters, backdrops,
+    # props, AND a full beat-by-beat shot breakdown in one JSON response
+    # spreads the model's attention thin across very different tasks --
+    # scene coverage in particular tends to get shortchanged since it's
+    # both the largest sub-task and the last thing reasoned about. Each
+    # stage below gets its own prompt, its own token budget, and knows
+    # what earlier stages already found so it can reference them for
+    # continuity without redefining them.
+    warnings = []
+    char_items = _run_stage(provider, CHAR_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings)
+    master_items = _run_stage(
+        provider, MASTER_SYSTEM_PROMPT,
+        base + _context_line("Already-identified characters", char_items) + "\nReturn the JSON now.",
+        "Backdrops", warnings,
+    )
+    prop_items = _run_stage(
+        provider, PROP_SYSTEM_PROMPT,
+        base + _context_line("Already-identified characters", char_items) + "\n"
+        + _context_line("Already-identified backdrops", master_items) + "\nReturn the JSON now.",
+        "Props", warnings,
+    )
+
+    shot_user_prompt = (
+        base + _context_line("Characters", char_items) + "\n"
+        + _context_line("Backdrops", master_items) + "\n"
+        + _context_line("Props", prop_items) + "\nReturn the JSON now."
+    )
+    try:
+        shot_plan = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, shot_user_prompt))
+        shot_items = shot_plan["items"]
+        summary = shot_plan["summary"]
+        questions = shot_plan["questions"]
+    except HarryError as error:
+        warnings.append(f"⚠️ Shots pass failed: {error}")
+        shot_items, summary, questions = [], "", []
+
+    all_items = char_items + master_items + prop_items + shot_items
+    if not all_items:
+        raise HarryError("Harry could not produce any recommendations. " + " ".join(warnings))
+
+    if not summary:
+        summary = (f"Identified {len(char_items)} character(s), {len(master_items)} backdrop(s), "
+                   f"{len(prop_items)} prop(s), and {len(shot_items)} shot(s) across separate focused passes.")
+
+    plan = {"summary": summary, "questions": questions + warnings, "items": all_items}
     plan.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": title or "Untitled project", "provider": provider, "created_at": _timestamp(), "source_path": source_path})
     LIBRARY_DIR.mkdir(exist_ok=True)
     (LIBRARY_DIR / f"plan_{plan['plan_id']}.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
