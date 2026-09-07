@@ -1,0 +1,179 @@
+{
+  "set_name": "ComfyUI Director Harness - UI graphics",
+  "generated_utc": "2026-09-07T15:51:26Z",
+  "generator": "Microsoft 365 Copilot image generation (Playwright-driven), base64 harvest + local post-process",
+  "style_anchor": {
+    "asset_id": "app_icon",
+    "reference_file": "_anchor_reference.png",
+    "note": "Every non-anchor asset was generated in a fresh conversation with _anchor_reference.png attached, so line weight and palette stay consistent. Reuse this file for any regeneration."
+  },
+  "style": {
+    "look": "flat vector, clean geometric shapes, subtle flat shading, no gradients, no drop shadows, no text",
+    "palette": {
+      "navy": "#172534",
+      "apricot": "#E8AE72",
+      "linen": "#F5F1E8",
+      "slate": "#5C6C77",
+      "gold": "#F6BE45"
+    }
+  },
+  "post_processing": {
+    "alpha_key": "near-white background flood-filled from the four corners to alpha 0 (tolerance 26/255)",
+    "crops": {
+      "welcome_hero_1792x1024.png": "21:9, trimmed evenly top and bottom",
+      "wrap_banner_1792x1024.png": "3:1, vertically centred on the subject bounding box"
+    }
+  },
+  "notes": [
+    "Filenames keep the dimensions from the original spec; the actual pixel dimensions are the width/height fields below and differ because M365 Copilot renders 1536x1024 and 1254x1254 rather than DALL-E's 1792x1024.",
+    "registry_empty_state is a full-bleed dark interior scene, so it has no transparent background by design.",
+    "favicon_source is the source art only - export 16/32/48/64 px favicons from it downstream."
+  ],
+  "asset_count": 9,
+  "assets": [
+    {
+      "id": "app_icon",
+      "filename": "app_icon_1024.png",
+      "relative_path": "App images/app_icon_1024.png",
+      "description": "Application icon - style anchor for the whole set",
+      "type": "icon",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 314324,
+      "sha256": "3408d897cbdf66eaa8675718ddaa0780420d873f2031de86bc4ae24e47d4c57f",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "welcome_hero_banner",
+      "filename": "welcome_hero_1792x1024.png",
+      "relative_path": "App images/welcome_hero_1792x1024.png",
+      "description": "Wide hero banner for the welcome / first-run screen",
+      "type": "banner",
+      "width": 1536,
+      "height": 658,
+      "aspect_ratio": 2.334,
+      "format": "PNG",
+      "bytes": 1303954,
+      "sha256": "1b9eedd2d9a795b8db1b3a0b184390621c2db3780ae22d4df083cdae0a954c9c",
+      "has_transparency": false,
+      "background": "opaque artwork to edges",
+      "status": "ok"
+    },
+    {
+      "id": "tab_icon_harry",
+      "filename": "tab_icon_harry_1024.png",
+      "relative_path": "App images/tab_icon_harry_1024.png",
+      "description": "Tab icon - script / brief tab (clipboard, pencil, megaphone)",
+      "type": "icon",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 232189,
+      "sha256": "1556770108682c6a5e12e8e0710143ca622b14c7988c63fc30d198b5cbf72f96",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "tab_icon_build",
+      "filename": "tab_icon_build_1024.png",
+      "relative_path": "App images/tab_icon_build_1024.png",
+      "description": "Tab icon - build tab (vintage film camera + reel)",
+      "type": "icon",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 377563,
+      "sha256": "6412cb16630fe3ab1bd7f28d069bd17182a2d3517fcd2283f9fa24f682feaa3d",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "tab_icon_registry",
+      "filename": "tab_icon_registry_1024.png",
+      "relative_path": "App images/tab_icon_registry_1024.png",
+      "description": "Tab icon - registry tab (three stacked film reels)",
+      "type": "icon",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 472728,
+      "sha256": "963a78b1d1d0a53304f525f735adff44bf8702a8e22c4b8520e7cb15d21a1a72",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "reward_seal_print_the_take",
+      "filename": "reward_seal_1024.png",
+      "relative_path": "App images/reward_seal_1024.png",
+      "description": "Reward / success seal badge (film-festival style checkmark)",
+      "type": "badge",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 703320,
+      "sha256": "971696d68f3591415a65562a9af1cfccdcb6b25c5ff0c21f93cdff3b76550ae2",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "celebration_wrap_banner",
+      "filename": "wrap_banner_1792x1024.png",
+      "relative_path": "App images/wrap_banner_1792x1024.png",
+      "description": "Celebration banner shown on wrap / completion",
+      "type": "banner",
+      "width": 1536,
+      "height": 512,
+      "aspect_ratio": 3.0,
+      "format": "PNG",
+      "bytes": 108434,
+      "sha256": "e1bfd2cdb87c6a89133aecffb1df2c0a0c26704e5c69148c869ce48c22e21289",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    },
+    {
+      "id": "registry_empty_state",
+      "filename": "registry_empty_state_1792x1024.png",
+      "relative_path": "App images/registry_empty_state_1792x1024.png",
+      "description": "Empty-state illustration for the registry view",
+      "type": "illustration",
+      "width": 1536,
+      "height": 1024,
+      "aspect_ratio": 1.5,
+      "format": "PNG",
+      "bytes": 872228,
+      "sha256": "d3f60c6fbc7af4c65557b345ba9ba872fdded4144e8345cea75668ae8d6191ea",
+      "has_transparency": false,
+      "background": "opaque artwork to edges",
+      "status": "ok"
+    },
+    {
+      "id": "favicon_source",
+      "filename": "favicon_source_1024.png",
+      "relative_path": "App images/favicon_source_1024.png",
+      "description": "Ultra-simplified two-tone source art for favicon export",
+      "type": "icon",
+      "width": 1024,
+      "height": 1024,
+      "aspect_ratio": 1.0,
+      "format": "PNG",
+      "bytes": 413314,
+      "sha256": "b28f2d1dbd94a6b34c6cf894b6bbb77f2dc278bdbcb37025415521356ed58f57",
+      "has_transparency": true,
+      "background": "transparent (white color-keyed)",
+      "status": "ok"
+    }
+  ]
+}

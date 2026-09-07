@@ -24,6 +24,7 @@ import json
 import os
 import random
 import shutil
+import base64
 
 import gradio as gr
 from PIL import Image, ImageDraw
@@ -34,6 +35,42 @@ import sheet_composer as composer
 import harry_advisor as harry
 import project_manager as projects
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
+
+# ---------------------------------------------------------------------------
+# UI graphics — generated via the batch job, resized/optimized locally by
+# prepare_ui_assets.py into assets/ui/. Every usage below degrades
+# gracefully to the previous emoji/CSS-only look if a file isn't present,
+# so a fresh clone without assets/ui/ populated still runs correctly.
+# ---------------------------------------------------------------------------
+
+UI_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "ui")
+
+
+def _asset_data_uri(filename: str) -> str:
+    """Base64-encodes a PNG from assets/ui/ into an inline data URI. Using
+    data URIs (rather than Gradio's static-file serving) sidesteps
+    version-dependent static-path behavior entirely -- this works
+    identically whether the app is running on Gradio 4.x or 6.x."""
+    path = os.path.join(UI_ASSETS_DIR, filename)
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+UI_IMAGES = {
+    "app_icon": _asset_data_uri("app_icon.png"),
+    "welcome_hero": _asset_data_uri("welcome_hero_banner.png"),
+    "tab_icon_harry": _asset_data_uri("tab_icon_harry.png"),
+    "tab_icon_build": _asset_data_uri("tab_icon_build.png"),
+    "tab_icon_registry": _asset_data_uri("tab_icon_registry.png"),
+    "reward_seal": _asset_data_uri("reward_seal_print_the_take.png"),
+    "wrap_banner": _asset_data_uri("celebration_wrap_banner.png"),
+    "registry_empty_illustration": _asset_data_uri("registry_empty_state.png"),
+}
+
+FAVICON_PATH = os.path.join(UI_ASSETS_DIR, "favicon.ico")
 
 CFG = cfgmod.load_config()
 ACTIVE_PROJECT_ID = projects.ensure_active(CFG.active_project_id)
@@ -643,8 +680,11 @@ def registry_empty_state():
     rows = store.list_entries(CFG.storyboard_path)
     if rows:
         return gr.update(visible=False)
+    illustration = (f'<img src="{UI_IMAGES["registry_empty_illustration"]}" alt="" '
+                    f'style="max-width:360px;display:block;margin:0 auto 12px;border-radius:10px;" />'
+                    if UI_IMAGES["registry_empty_illustration"] else "")
     return gr.update(visible=True, value=(
-        '<div class="empty-state">🎬 Nothing locked yet. Head to the <strong>Build</strong> tab '
+        f'<div class="empty-state">{illustration}🎬 Nothing locked yet. Head to the <strong>Build</strong> tab '
         'to create your first character, backdrop, prop, or shot.</div>'
     ))
 
@@ -694,7 +734,10 @@ def reward_card(text: str) -> str:
     if not text:
         return ""
     kind = "warn" if text.strip().startswith("⚠️") else "win"
-    return f'<div class="reward-card {kind}">{text}</div>'
+    seal_html = ""
+    if kind == "win" and UI_IMAGES["reward_seal"]:
+        seal_html = f'<img src="{UI_IMAGES["reward_seal"]}" alt="" style="width:28px;height:28px;vertical-align:middle;margin-right:8px;" />'
+    return f'<div class="reward-card {kind}">{seal_html}{text}</div>'
 
 
 def generate_click_ui(entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
@@ -713,8 +756,10 @@ def lock_click_ui(entry_id, entry_type, build_stage, panel_key, beat, descriptio
         template = composer.get_template(entry_type)
         filled = len(store.get_panel_images(CFG.storyboard_path, entry_id))
         if template and filled >= len(template):
+            banner_img = (f'<img src="{UI_IMAGES["wrap_banner"]}" alt="" style="width:100%;border-radius:10px;display:block;margin-bottom:10px;" />'
+                          if UI_IMAGES["wrap_banner"] else "")
             html += (
-                '<div class="celebration-banner">🎬 <strong>That\'s a wrap!</strong> Every panel for '
+                f'<div class="celebration-banner">{banner_img}🎬 <strong>That\'s a wrap!</strong> Every panel for '
                 f'{entry_id} is printed — render the sheet below to see the finished reel.</div>'
             )
     return html
@@ -1130,7 +1175,14 @@ Otherwise, head to **Build** and call "action" on the first scene yourself.
 # ---------------------------------------------------------------------------
 
 with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as demo:
-    gr.Markdown("# 🎬 ComfyUI Director Harness")
+    if UI_IMAGES["app_icon"]:
+        gr.HTML(
+            f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">'
+            f'<img src="{UI_IMAGES["app_icon"]}" alt="" style="width:40px;height:40px;border-radius:8px;" />'
+            f'<h1 style="margin:0;">ComfyUI Director Harness</h1></div>'
+        )
+    else:
+        gr.Markdown("# 🎬 ComfyUI Director Harness")
     with gr.Row(elem_classes=["project-toolbar"]):
         project_selector = gr.Dropdown(label="Active project", choices=projects.choices(), value=ACTIVE_PROJECT_ID, scale=3)
         project_label = gr.Markdown(f"**{projects.get_project(ACTIVE_PROJECT_ID)['title']}** — {projects.get_project(ACTIVE_PROJECT_ID)['version']}", scale=2)
@@ -1146,6 +1198,8 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
     with gr.Tab("👋 Welcome"):
         with gr.Group(elem_id="welcome-hero"):
+            if UI_IMAGES["welcome_hero"]:
+                gr.HTML(f'<img src="{UI_IMAGES["welcome_hero"]}" alt="" style="width:100%;border-radius:10px;display:block;margin-bottom:14px;" />')
             gr.Markdown(WELCOME_MARKDOWN)
             gr.HTML(FLOW_SVG)
             gr.Markdown(WELCOME_MARKDOWN_2)
@@ -1237,8 +1291,10 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         )
 
     with gr.Tab("🛠️ Build"):
+        build_icon = (f'<img src="{UI_IMAGES["tab_icon_build"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                     if UI_IMAGES["tab_icon_build"] else "🎥 ")
+        gr.HTML(f'<h2 style="display:flex;align-items:center;">{build_icon}On set</h2>')
         gr.Markdown(
-            "## 🎥 On set\n"
             "Every scene starts here. Work the slate top to bottom — nothing "
             "makes it into the final reel until you **print the take**."
         )
@@ -1413,8 +1469,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         entry_type.change(concept_thumb_refresh, inputs=[entry_id, entry_type], outputs=concept_thumb)
 
     with gr.Tab("🧭 Harry the Advisor"):
+        harry_icon = (f'<img src="{UI_IMAGES["tab_icon_harry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                     if UI_IMAGES["tab_icon_harry"] else "🎬 ")
+        gr.HTML(
+            f'<h2 style="display:flex;align-items:center;">{harry_icon}Harry — your assistant director</h2>'
+        )
         gr.Markdown(
-            "## 🎬 Harry — your assistant director\n"
             "Every production needs a first AD to read the script and build the "
             "call sheet before the director steps on set. That's Harry. Bring "
             "him the script, story, poem, or narration; he proposes the "
@@ -1463,8 +1523,10 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         harry_apply_btn.click(harry_apply_drafts_ui, inputs=[harry_table, harry_plan], outputs=[build_preset, build_checklist, harry_apply_status])
 
     with gr.Tab("📋 Registry"):
+        registry_icon = (f'<img src="{UI_IMAGES["tab_icon_registry"]}" alt="" style="width:32px;height:32px;vertical-align:middle;margin-right:10px;" />'
+                         if UI_IMAGES["tab_icon_registry"] else "🎞️ ")
+        gr.HTML(f'<h2 style="display:flex;align-items:center;">{registry_icon}The screening room</h2>')
         gr.Markdown(
-            "## 🎞️ The screening room\n"
             "Every take you've printed. Locking a new version of something "
             "you've already named updates that entry and adds your new note "
             "underneath the old one — it won't duplicate. The Chained from "
@@ -1516,4 +1578,4 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(favicon_path=FAVICON_PATH if os.path.exists(FAVICON_PATH) else None)

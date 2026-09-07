@@ -28,14 +28,43 @@ backdrops, shot keyframes):
   by one `entry_id` convention (`shot_id`, `CHAR:name`, `MASTER:name`,
   `PROP:name`). Locking an entry (or panel) a second time updates the row
   in place and appends to its note log rather than duplicating rows.
-- `align_narration.py` — word-level forced alignment of the narration
-  audio against the poem's beat markers, producing a `beats.json` the
-  Registry tab's Import button reads directly. **Run this on TheBeast, not
-  in a cloud coding session** — Whisper's model weights are hosted on
-  domains a cloud session's network typically can't reach, and the model
-  file (1-3GB+) may not fit a cloud session's disk quota either. One-time,
-  ~5 minute run: `pip install openai-whisper && python align_narration.py
-  your_audio.wav`.
+- `prepare_ui_assets.py` — one-time local script that resizes the app's
+  own UI graphics (logo, tab icons, hero banner, reward seal, celebration
+  banner, empty-state illustration, favicon) from their generated source
+  size down to what the app actually displays them at, and copies them
+  into the tracked `assets/ui/` folder. See "UI graphics" below.
+
+## UI graphics
+
+The app's visual identity (header logo, tab-header icons, Welcome hero
+banner, reward-card seal, "That's a wrap" celebration banner, Registry
+empty-state illustration, favicon) lives in `assets/ui/`, tracked in git.
+
+**If `assets/ui/` is empty or missing files**, the app still runs
+correctly — every usage in `app.py` checks for the file first and falls
+back to the previous emoji/CSS-only look. Nothing crashes on a fresh
+clone before graphics have been generated.
+
+**To (re)generate the graphics:**
+1. The prompts and batch-execution instructions live in
+   `asset_manifest.json` (machine-readable) — generate the images
+   yourself using those prompts (image-grounded batch: one style-anchor
+   image first, then every other asset generated with that anchor
+   attached as a style reference, so line weight and palette stay
+   consistent across the set).
+2. Run `python prepare_ui_assets.py "<folder containing the generated
+   PNGs>"` from the repo root. This resizes each asset to its actual
+   display size (icons are used small — no need to ship 1024px source art
+   in the running app), generates a proper multi-size `favicon.ico`, and
+   writes everything into `assets/ui/` with the filenames `app.py`
+   expects.
+3. `git add assets/ui` and commit — these are tracked app-identity
+   assets, not gitignored production/project data.
+
+Locked style contract for any regeneration: flat vector, clean geometric
+shapes, subtle flat shading, no gradients, no drop shadows, no text baked
+into the art. Palette: navy `#172534`, apricot `#E8AE72`, linen `#F5F1E8`,
+slate `#5C6C77`, gold `#F6BE45`.
 - `sheet_composer.py` — renders a composite reference sheet for `CHAR:`,
   `MASTER:`, and `PROP:` entries from individually-generated panels,
   against a **fixed** panel template per entry_type. `CHAR` sheets (18
