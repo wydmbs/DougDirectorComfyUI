@@ -190,6 +190,9 @@ def harry_provider_status(provider):
 
 
 def harry_save_source(title, source_text, audio_file):
+    if not (source_text or "").strip() and not audio_file:
+        return "", ("⚠️ There's no text to save yet — the source box is empty. If you attached a document, "
+                    "click 'Load attached text' first (or check whether it actually extracted any text).")
     try:
         metadata = harry.save_source(title, source_text, audio_file.name if audio_file else None)
         return metadata["source_id"], f"Saved source to Harry's project library: {metadata['source_id']}."
@@ -199,9 +202,17 @@ def harry_save_source(title, source_text, audio_file):
 
 def harry_extract_text(text_file):
     try:
-        return harry.extract_text_document(text_file.name if text_file else None), "Document text loaded. Review or edit it before asking Harry."
+        text = harry.extract_text_document(text_file.name if text_file else None)
     except harry.HarryError as error:
         return gr.update(), f"⚠️ {error}"
+    if not text.strip():
+        return gr.update(), (
+            "⚠️ That document loaded, but no readable text came out of it. Common causes: the content sits "
+            "inside a table or text box rather than the main document body (python-docx only reads body "
+            "paragraphs), the file is scanned images with no real text layer, or it's protected/encrypted. "
+            "Try Option B (paste the text directly) instead, or export the document differently."
+        )
+    return text, "✅ Document text loaded. Review or edit it before asking Harry."
 
 
 def harry_transcribe(audio_file):
@@ -234,11 +245,21 @@ def harry_analyze_ui(provider, title, source_text, source_id, audio_file, text_f
             if isinstance(extracted, str) and extracted.strip():
                 source_text = extracted
                 prefix_status = msg + " "
+            else:
+                # Extraction ran but genuinely produced nothing usable --
+                # surface THAT specific reason (empty document / table-only
+                # content / scanned images / etc) rather than falling
+                # through to the generic "paste text or transcribe" error,
+                # which is misleading once a file actually has been
+                # attached and processed.
+                return {}, "", "", [], source_id, source_text, reward_card(msg)
         elif audio_file is not None:
             transcribed, msg = harry_transcribe(audio_file)
             if isinstance(transcribed, str) and transcribed.strip():
                 source_text = transcribed
                 prefix_status = msg + " "
+            else:
+                return {}, "", "", [], source_id, source_text, reward_card(msg)
 
     plan, summary, questions, rows, new_source_id, status = harry_analyze(
         provider, title, source_text, source_id, audio_file)
