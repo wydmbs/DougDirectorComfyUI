@@ -279,6 +279,14 @@ def harry_apply_drafts_ui(rows, plan):
     return preset_update, checklist_update, reward_card(status)
 
 
+def harry_export_call_sheet_ui(title, rows, plan):
+    """Exports the call sheet AS CURRENTLY SHOWN in the review table --
+    including any manual edits or unticked rows -- not just the raw
+    provider output, since the table is the actual source of truth by the
+    time someone wants to export and share it."""
+    return harry.export_call_sheet(title, rows, plan)
+
+
 def harry_start_over():
     """Explicit exit path back to a blank Harry tab -- clears the title,
     source text, both file attachments, and every downstream result,
@@ -1400,6 +1408,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 harry_apply_btn = gr.Button("Approve call sheet → send to Build", variant="primary")
                 harry_apply_status = gr.HTML("")
                 harry_goto_build_btn = gr.Button("🎬 Go to Build →")
+                harry_export_btn = gr.DownloadButton("⬇️ Export call sheet (.xlsx)")
             # Attaching a document should load it right away, not require a
             # separate manual click before it's usable -- the button stays too,
             # for re-loading after swapping the attached file.
@@ -1410,6 +1419,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file],
                                 outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
             harry_goto_build_btn.click(lambda: gr.Tabs(selected="build"), outputs=main_tabs)
+            harry_export_btn.click(harry_export_call_sheet_ui, inputs=[harry_title, harry_table, harry_plan], outputs=harry_export_btn)
             harry_reset_btn.click(
                 harry_start_over,
                 outputs=[harry_title, harry_source, harry_text_file, harry_audio, harry_source_id,

@@ -22,7 +22,14 @@ def set_library_dir(path):
 OPENSCOUT_CONFIG = Path.home() / "OpenScout" / "openscout" / "config.yaml"
 
 SYSTEM_PROMPT = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
-Read the supplied script, story, poem, or narration transcript. Recommend only the reusable preparation artifacts that will genuinely help production: characters, recurring props, recurring backdrops, and key shot/beat drafts. Prefer a concise, useful list over exhaustive fragmentation.
+Read the supplied script, story, poem, or narration transcript. Recommend the reusable preparation artifacts that will genuinely help production: characters, recurring props, recurring backdrops, and key shot/beat drafts.
+
+SCENE/BEAT COVERAGE IS MANDATORY, NOT OPTIONAL:
+If the source text contains explicit section markers (bracketed headers like "< The Ship >", chapter titles, scene headings, or similarly clear structural breaks), treat each one as a beat and include at least one SHOT-kind item for every single marked section -- do not silently skip a marked section because it seems minor or because you are trying to keep the list short. A missing beat is a more serious omission than a slightly longer list. If the source has no explicit markers, infer a reasonable beat structure yourself (opening, rising action, climax, resolution, etc.) and still cover it with SHOT items.
+
+RECURRING PHYSICAL OBJECTS ARE PROPS OR MASTERS, EVEN WHEN DESCRIBED POETICALLY:
+A recurring object central to multiple beats (a vehicle, a vessel, a building, a key prop the characters interact with repeatedly) should get its own CHAR/MASTER/PROP entry even if the text never uses a single plain noun for it consistently -- reading "sail ship," "cargo hold," "the hull," and "a sleeping hulk" across a few lines is the same object described four ways, not four separate ideas, and it clearly warrants a PROP or MASTER entry. Do not require a single literal name to appear before recommending something the narrative obviously depends on.
+Separately, when the text implies a real-world object or mechanism the story logically requires but never actually mentions (e.g. characters are "moved from field to ship" with no vehicle named), you MAY suggest it as a tentative item, but mark its continuity_note as "inferred, not explicit in source -- confirm before locking" so the director knows it's a suggestion, not something read directly off the page.
 
 Return JSON only, with this exact shape:
 {
@@ -37,12 +44,12 @@ Return JSON only, with this exact shape:
       "continuity_note": "visual or narrative continuity guidance",
       "positive_prompt": "initial target-model-aware visual prompt",
       "negative_prompt": "things to avoid",
-      "beat": "optional story section",
+      "beat": "the story section this belongs to -- required for every SHOT item, and for CHAR/MASTER/PROP items tie it to the beat where they're introduced",
       "reused_from": "optional prior item id"
     }
   ]
 }
-Do not invent named people or key objects without textual evidence. Questions are exceptional: ask only when a decision materially changes the prep plan."""
+Questions are exceptional: ask only when a decision materially changes the prep plan."""
 
 
 class HarryError(Exception):
@@ -251,6 +258,56 @@ def analyze(provider, title, source_text, source_path="", uploaded_path=None):
 
 def plan_to_rows(plan):
     return [[True, item["kind"], item["name"], item["suggested_id"], item["description"], item["continuity_note"], item["positive_prompt"], item["negative_prompt"], item["beat"], item["reused_from"]] for item in plan.get("items", [])]
+
+
+CALL_SHEET_COLUMNS = ["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note",
+                      "Positive prompt", "Negative prompt", "Beat", "Chained from"]
+
+
+def export_call_sheet(title, rows, plan):
+    """Writes the current call sheet (as it stands in the review table --
+    including any manual edits/unticks, not just the raw provider output)
+    to a real .xlsx file for offline review or sharing. Two sheets:
+    Call Sheet (the rows themselves) and Summary (Harry's reading + any
+    clarification questions), so the export is self-contained -- someone
+    reviewing it doesn't need the app open to understand the context."""
+    from openpyxl import Workbook
+    from openpyxl.utils import get_column_letter
+
+    LIBRARY_DIR.mkdir(exist_ok=True)
+    export_dir = LIBRARY_DIR / "exports"
+    export_dir.mkdir(exist_ok=True)
+
+    wb = Workbook()
+    sheet = wb.active
+    sheet.title = "Call Sheet"
+    sheet.append(CALL_SHEET_COLUMNS)
+    for row in (rows or []):
+        # rows may come from the Gradio Dataframe as-is; pad/trim defensively
+        # in case of manual edits that changed column count somehow.
+        padded = list(row) + [""] * (len(CALL_SHEET_COLUMNS) - len(row))
+        sheet.append(padded[:len(CALL_SHEET_COLUMNS)])
+    for i, _ in enumerate(CALL_SHEET_COLUMNS, start=1):
+        sheet.column_dimensions[get_column_letter(i)].width = 24
+
+    summary_sheet = wb.create_sheet("Summary")
+    summary_sheet.append(["Title", title or "Untitled project"])
+    summary_sheet.append(["Exported", _timestamp()])
+    summary_sheet.append(["Provider", (plan or {}).get("provider", "")])
+    summary_sheet.append([])
+    summary_sheet.append(["Harry's reading"])
+    summary_sheet.append([(plan or {}).get("summary", "")])
+    summary_sheet.append([])
+    summary_sheet.append(["Clarification questions"])
+    for question in (plan or {}).get("questions", []):
+        summary_sheet.append([question])
+    summary_sheet.column_dimensions["A"].width = 90
+
+    safe_title = _slug(title) or "call_sheet"
+    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_title}_call_sheet.xlsx"
+    out_path = export_dir / filename
+    wb.save(out_path)
+    return str(out_path)
 
 
 def rows_to_plan(rows, template=None):
