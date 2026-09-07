@@ -601,10 +601,14 @@ def render_composite_preview(entry_id, entry_type):
 
 def save_composite_ui(entry_id, entry_type, composite_path, sheet_note):
     if not composite_path:
-        return "⚠️ Render a preview first (the button above)."
+        return "⚠️ Preview the reel first (the button above)."
     store.set_composite_image(CFG.storyboard_path, entry_id.strip(), entry_type, entry_type,
                                composite_path, (sheet_note or "").strip())
-    return f"🔒 Saved as {entry_id}'s reference sheet. Check the Registry tab."
+    return f"🎞️ Printed {entry_id}'s reel. Check the Registry tab."
+
+
+def save_composite_ui_html(entry_id, entry_type, composite_path, sheet_note):
+    return reward_card(save_composite_ui(entry_id, entry_type, composite_path, sheet_note))
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +625,16 @@ def registry_refresh():
     ]
 
 
+def registry_empty_state():
+    rows = store.list_entries(CFG.storyboard_path)
+    if rows:
+        return gr.update(visible=False)
+    return gr.update(visible=True, value=(
+        '<div class="empty-state">🎬 Nothing locked yet. Head to the <strong>Build</strong> tab '
+        'to create your first character, backdrop, prop, or shot.</div>'
+    ))
+
+
 def sheets_gallery_refresh():
     rows = store.list_entries(CFG.storyboard_path)
     items = []
@@ -631,10 +645,65 @@ def sheets_gallery_refresh():
     return items
 
 
+def sheets_empty_state():
+    if sheets_gallery_refresh():
+        return gr.update(visible=False)
+    return gr.update(visible=True, value=(
+        '<div class="empty-state">No reference sheets rendered yet. Lock a Character, Backdrop, '
+        'or Prop\'s panels in Build, then render its sheet.</div>'
+    ))
+
+
 def beats_table_refresh():
     rows = store.list_beats(CFG.storyboard_path)
     return [[r.get("order"), r.get("beat"), r.get("start_s"), r.get("end_s"),
              r.get("duration_s"), r.get("source"), r.get("notes")] for r in rows]
+
+
+def beats_empty_state():
+    if store.list_beats(CFG.storyboard_path):
+        return gr.update(visible=False)
+    return gr.update(visible=True, value=(
+        '<div class="empty-state">No beat timing imported yet. Import a beats JSON above, '
+        'or run <code>align_narration.py</code> against your narration audio.</div>'
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Reward moments — a printed take should feel like something happened.
+# One-time entrance animation only, triggered by an actual lock or generate,
+# never a looping/decorative animation (see UI rules: motion clarifies a
+# state change, it isn't there for decoration).
+# ---------------------------------------------------------------------------
+
+def reward_card(text: str) -> str:
+    if not text:
+        return ""
+    kind = "warn" if text.strip().startswith("⚠️") else "win"
+    return f'<div class="reward-card {kind}">{text}</div>'
+
+
+def generate_click_ui(entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
+                       base_seed, n_variants):
+    gallery, status = generate_click(entry_id, entry_type, build_stage, panel_key, prompt_positive,
+                                      prompt_negative, base_seed, n_variants)
+    return gallery, reward_card(status)
+
+
+def lock_click_ui(entry_id, entry_type, build_stage, panel_key, beat, description, reused_from,
+                   prompt_positive, prompt_negative, winner_path, winner_seed, note):
+    status = lock_click(entry_id, entry_type, build_stage, panel_key, beat, description, reused_from,
+                         prompt_positive, prompt_negative, winner_path, winner_seed, note)
+    html = reward_card(status)
+    if entry_type in SHEET_TYPES and build_stage == PANEL_STAGE and status.startswith("🔒"):
+        template = composer.get_template(entry_type)
+        filled = len(store.get_panel_images(CFG.storyboard_path, entry_id))
+        if template and filled >= len(template):
+            html += (
+                '<div class="celebration-banner">🎬 <strong>That\'s a wrap!</strong> Every panel for '
+                f'{entry_id} is printed — render the sheet below to see the finished reel.</div>'
+            )
+    return html
 
 
 def import_beats_ui(beats_file):
@@ -691,18 +760,26 @@ THEME = gr.themes.Soft(
 
 CUSTOM_CSS = """
 :root {
+    /* Neutrals — the locked baseline, unchanged */
     --horizon-navy: #172534;
     --storm-slate: #273746;
     --weathered-blue-gray: #5C6C77;
     --sea-mist: #DCE2DF;
     --cloud-linen: #F5F1E8;
     --sunlit-sand: #E9D2AB;
+
+    /* Accent 1 — amber family: everyday action (buttons, "you can act here") */
     --signal-amber: #E8AE72;
-    --horizon-orange: #9A5735;
+    --horizon-orange: #9A5735; /* amber's pressed/hover shade, not a separate accent */
+
+    /* Accent 2 — gold family: reserved for reward/completion moments only */
     --sunbeam-gold: #F6BE45;
-    --ember: #B8462C;
+    --pale-gold: #FFE09A; /* gold's lighter tint, used for focus rings + reward glows */
+
+    /* Narrow semantic exception: a single hue reserved only for "done/complete"
+       checkmark-style indicators, always paired with an icon, never used as a
+       general decorative accent. Not counted against the 2-accent budget. */
     --sea-glass: #3E7B68;
-    --pale-gold: #FFE09A;
 }
 
 body, .gradio-container {
@@ -712,13 +789,13 @@ body, .gradio-container {
 .gradio-container { max-width: 1440px !important; }
 .tabs {
     background: var(--storm-slate);
-    border-radius: 16px;
+    border-radius: 12px;
     padding: 6px;
     margin-bottom: 18px;
 }
 .tabs button {
     color: var(--cloud-linen) !important;
-    border-radius: 10px !important;
+    border-radius: 6px !important;
 }
 .tabs button.selected {
     background: var(--cloud-linen) !important;
@@ -728,18 +805,15 @@ body, .gradio-container {
 .step-card {
     background: var(--cloud-linen);
     border: 1px solid #B8C1BE;
-    border-radius: 14px;
+    border-radius: 12px;
     padding: 16px 20px;
     margin-bottom: 14px;
-    border-left: 5px solid var(--weathered-blue-gray);
+    border-left: 5px solid var(--signal-amber);
     box-shadow: 0 4px 12px rgb(23 37 52 / 8%);
 }
-.step-1 { border-left-color: var(--weathered-blue-gray); }
-.step-2 { border-left-color: #C98D68; }
-.step-3 { border-left-color: var(--signal-amber); }
-.step-4 { border-left-color: var(--sunbeam-gold); }
-.step-5 { border-left-color: var(--sea-glass); }
-.step-6 { border-left-color: var(--horizon-orange); }
+/* Every step card uses the same amber border now — one accent for "this is
+   part of the build flow," not six different hues per step. */
+.step-card h4 { margin-top: 0 !important; }
 .step-card, .step-card .block, .step-card .form, .step-card .wrap,
 .step-card .gr-box, .step-card .gr-group, .step-card fieldset {
     background: var(--cloud-linen) !important;
@@ -749,7 +823,6 @@ body, .gradio-container {
 .step-card p, .step-card span, .step-card legend {
     color: var(--horizon-navy) !important;
 }
-.step-card h4 { margin-top: 0 !important; }
 .step-card label {
     color: var(--horizon-navy) !important;
     font-weight: 600;
@@ -769,7 +842,7 @@ body, .gradio-container {
     background: var(--cloud-linen);
     border: 1px solid var(--weathered-blue-gray);
     border-left: 7px solid var(--signal-amber);
-    border-radius: 14px;
+    border-radius: 12px;
     box-shadow: 0 4px 12px rgb(23 37 52 / 10%);
     color: var(--horizon-navy);
     margin: 8px 0 18px;
@@ -789,15 +862,14 @@ body, .gradio-container {
 .build-context-kicker { color: var(--weathered-blue-gray); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; }
 .build-context-title { color: var(--horizon-navy); font-size: 1.3rem; font-weight: 700; line-height: 1.25; }
 .build-context-copy { color: var(--horizon-navy); line-height: 1.4; margin-top: 2px; }
-.build-context-master { border-left-color: var(--sea-glass); }
-.build-context-prop { border-left-color: #B9824A; }
-.build-context-shot { border-left-color: var(--horizon-orange); }
+/* All four build-type banners share the same amber accent now, distinguished
+   by icon and copy rather than a different border hue each. */
 
 .stage-guide {
     background: #FFF9EA;
     border: 1px solid var(--weathered-blue-gray);
     border-left: 6px solid var(--signal-amber);
-    border-radius: 10px;
+    border-radius: 12px;
     color: var(--horizon-navy);
     line-height: 1.5;
     margin-bottom: 12px;
@@ -807,7 +879,7 @@ body, .gradio-container {
 .character-manager {
     background: #FFF9EA !important;
     border: 1px solid var(--weathered-blue-gray) !important;
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 14px 16px !important;
 }
 .character-manager .block, .character-manager .form, .character-manager .wrap,
@@ -845,7 +917,7 @@ body, .gradio-container {
 }
 .trigger-preview code {
     background: var(--storm-slate);
-    border-radius: 4px;
+    border-radius: 6px;
     color: #FFFFFF;
     padding: 2px 5px;
 }
@@ -853,7 +925,7 @@ body, .gradio-container {
     background: #FFF9EA;
     border: 1px solid var(--weathered-blue-gray);
     border-left: 6px solid var(--signal-amber);
-    border-radius: 10px;
+    border-radius: 12px;
     line-height: 1.5;
     margin: 8px 0 14px;
     padding: 12px 14px;
@@ -865,7 +937,7 @@ body, .gradio-container {
 .harry-source-option {
     background: var(--cloud-linen) !important;
     border: 1px solid #B8C1BE !important;
-    border-radius: 10px;
+    border-radius: 12px;
     box-sizing: border-box;
     min-height: 470px;
     padding: 12px !important;
@@ -882,7 +954,7 @@ body, .gradio-container {
 .help-panel {
     background: #FFF9EA;
     border: 1px dashed var(--signal-amber);
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 8px 14px !important;
     margin-top: -6px;
     margin-bottom: 10px;
@@ -891,7 +963,7 @@ body, .gradio-container {
 #welcome-hero {
     background: linear-gradient(135deg, var(--storm-slate) 0%, var(--horizon-navy) 52%, #6C543F 100%);
     color: var(--cloud-linen);
-    border-radius: 16px;
+    border-radius: 12px;
     padding: 24px 28px;
     box-shadow: 0 8px 20px rgb(23 37 52 / 18%);
 }
@@ -924,6 +996,49 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
     outline: 3px solid var(--pale-gold) !important;
     outline-offset: 2px;
 }
+
+/* Empty states — Registry should never just look blank */
+.empty-state {
+    background: #FFF9EA;
+    border: 1px dashed var(--weathered-blue-gray);
+    border-radius: 12px;
+    color: var(--weathered-blue-gray);
+    padding: 22px;
+    text-align: center;
+    font-style: italic;
+    margin-bottom: 12px;
+}
+
+/* Reward moments — a lock or a wrap should feel like something happened.
+   One-time entrance animation only, triggered by a real user action
+   (generating or locking), never a looping/decorative animation. */
+.reward-card {
+    border-radius: 12px; padding: 14px 18px; margin-top: 8px;
+    font-weight: 500; animation: reward-pop 0.35s ease-out;
+}
+.reward-card.win {
+    background: #FFF4D6;
+    border: 1px solid var(--sunbeam-gold);
+    color: var(--horizon-navy);
+    box-shadow: 0 2px 10px rgb(246 190 69 / 25%);
+}
+.reward-card.warn {
+    background: #FDEDEA;
+    border: 1px solid var(--horizon-orange);
+    color: var(--horizon-navy);
+}
+@keyframes reward-pop {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.celebration-banner {
+    margin-top: 10px; padding: 18px 22px; border-radius: 12px; text-align: center;
+    font-size: 1.05em; font-weight: 600;
+    background: linear-gradient(135deg, #FFF4D6, #FFE9B8);
+    border: 1px solid var(--sunbeam-gold); color: var(--horizon-navy);
+    box-shadow: 0 4px 16px rgb(246 190 69 / 30%);
+    animation: reward-pop 0.4s ease-out;
+}
 """
 
 # ---------------------------------------------------------------------------
@@ -931,34 +1046,37 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 # ---------------------------------------------------------------------------
 
 WELCOME_MARKDOWN = """
-# Welcome — from story to production plan
+# 🎬 Welcome to the studio
 
-ComfyUI Director Harness turns a script, story, poem, or narration into a
-clear production workspace. It keeps the creative decisions that matter:
-what must be built, how it should look, which prompt and seed produced it,
-and what needs to remain consistent later.
+You're the director on this production. ComfyUI Director Harness turns a
+script, story, poem, or narration into a real shoot: what needs building,
+how it should look, which take you printed and why, and what has to stay
+consistent from scene to scene.
 
-**Start with Harry the Advisor** when you have source material. Harry reads
-your text or local transcription, recommends characters, backdrops, props,
-and draft shots, then gives you an editable approval list. Approved items
-become **Build presets** only — nothing is generated or locked automatically.
+**Start with Harry the Advisor** when you have source material — think of
+him as your first assistant director. Harry reads your text or a local
+transcription, recommends characters, backdrops, props, and draft shots,
+then hands you an editable call sheet. Approved items become **Build
+presets** only — nothing is generated or printed automatically. You're
+still the one who says "print it."
 
-In **Build**, first choose whether you are making a **Character**, **Backdrop**,
-**Prop**, or **Shot**. A Character has a permanent `CHAR:name` trigger for
-future prompting and LoRA work. Reusable assets begin with a concept, then
-continue into consistent reference-sheet panels. A Shot is a direct
-prompt → generate → choose → lock loop.
+On set, in **Build**, first choose whether you're building a **Character**,
+**Backdrop**, **Prop**, or **Shot**. A Character gets a permanent
+`CHAR:name` trigger for every future prompt and LoRA run — its screen
+credit, in a sense. Reusable assets get a concept locked first, then a full
+reference sheet of consistent takes. A Shot is a direct
+roll camera → review dailies → print loop.
 
-### The tabs, in the order you will usually use them
+### The tabs, in the order you'll usually use them
 
 1. **Setup** — connect ComfyUI and choose Harry's provider. Claude is the
    default; Azure OpenAI can reuse your local OpenScout configuration.
 2. **Harry the Advisor** — attach a text document, paste text, or attach audio
-   and transcribe it locally. Review, edit, and approve Harry's recommendations.
+   and transcribe it locally. Review, edit, and approve Harry's call sheet.
 3. **Build** — choose the artifact type, load an approved draft if useful,
-   generate options, and lock only the decisions you want to keep.
-4. **Registry** — inspect everything that is permanently locked, including
-   reference sheets and narration beat timing.
+   roll camera, and print only the takes worth keeping.
+4. **Registry** — your screening room: everything permanently printed,
+   including reference sheets and narration beat timing.
 
 ### The production flow
 """
@@ -985,11 +1103,11 @@ FLOW_SVG = """
 
 WELCOME_MARKDOWN_2 = """
 Use the **Harry prep checklist** in Build to track recommended artifacts as you
-complete them. The Registry remains the project's permanent source of truth;
-drafts are planning aids until you lock a result.
+complete them. The Registry — your screening room — remains the project's
+permanent source of truth; drafts are planning aids until you print a result.
 
 **Ready?** Start in **Harry the Advisor** if you have a story or narration.
-Otherwise, open **Build** and create the first artifact directly.
+Otherwise, head to **Build** and call "action" on the first scene yourself.
 """
 
 
@@ -1106,8 +1224,9 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
     with gr.Tab("🛠️ Build"):
         gr.Markdown(
-            "Work through the steps top to bottom. Nothing is saved "
-            "permanently until you hit **Lock**."
+            "## 🎥 On set\n"
+            "Every scene starts here. Work the slate top to bottom — nothing "
+            "makes it into the final reel until you **print the take**."
         )
         build_context_banner = gr.HTML(build_context("CHAR"))
         with gr.Group(elem_classes=["step-card", "step-1"]):
@@ -1183,15 +1302,15 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 prompt_brief = gr.Textbox(label="Copy this into your preferred AI assistant", lines=14, interactive=False)
 
         with gr.Group(elem_classes=["step-card", "step-3"]):
-            gr.Markdown("#### Step 3 — Generate some options")
+            gr.Markdown("#### Step 3 — Roll camera")
             with gr.Row():
                 base_seed = gr.Number(label="Seed (leave blank for random)", value=None)
-                n_variants = gr.Slider(label="How many versions", minimum=1, maximum=8, step=1, value=4)
-            gen_btn = gr.Button("Generate", variant="primary")
-            gallery = gr.Gallery(label="Your options — each one is labeled with its seed", columns=4)
-            gen_status = gr.Markdown("")
+                n_variants = gr.Slider(label="How many takes", minimum=1, maximum=8, step=1, value=4)
+            gen_btn = gr.Button("🎬 Action!", variant="primary")
+            gallery = gr.Gallery(label="The takes — each one labeled with its seed", columns=4)
+            gen_status = gr.HTML("")
             gen_btn.click(
-                generate_click,
+                generate_click_ui,
                 inputs=[entry_id, entry_type, build_stage, panel_key, prompt_positive, prompt_negative,
                         base_seed, n_variants],
                 outputs=[gallery, gen_status],
@@ -1199,24 +1318,24 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
         with gr.Group(elem_classes=["step-card", "step-4"]):
             gr.Markdown(
-                "#### Step 4 — Which one looks right?\n"
-                "Click an image above to see it larger, then copy its file path and "
+                "#### Step 4 — Review the dailies\n"
+                "Click a take above to see it larger, then copy its file path and "
                 "seed into the two boxes below."
             )
             with gr.Row():
-                winner_path = gr.Textbox(label="Winning image's file path")
-                winner_seed = gr.Number(label="Winning image's seed")
+                winner_path = gr.Textbox(label="Winning take's file path")
+                winner_seed = gr.Number(label="Winning take's seed")
             note = gr.Textbox(
-                label="Why this one? (saved permanently with the record)", lines=2,
+                label="Why this take? (saved permanently with the record)", lines=2,
                 placeholder="e.g. 'first version where the tweed cap read clearly at this angle'",
             )
 
         with gr.Group(elem_classes=["step-card", "step-5"]):
-            gr.Markdown("#### Step 5 — Lock it in")
-            lock_btn = gr.Button("🔒 Lock this in", variant="primary")
-            lock_status = gr.Markdown("")
+            gr.Markdown("#### Step 5 — Print the take")
+            lock_btn = gr.Button("🎞️ Print it", variant="primary")
+            lock_status = gr.HTML("")
             lock_btn.click(
-                lock_click,
+                lock_click_ui,
                 inputs=[entry_id, entry_type, build_stage, panel_key, beat, description, reused_from, prompt_positive,
                         prompt_negative, winner_path, winner_seed, note],
                 outputs=lock_status,
@@ -1225,12 +1344,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
         # --- CHAR / MASTER only: composite sheet rendering ---
         with gr.Group(visible=True, elem_classes=["step-card", "step-6"]) as composite_group:
             gr.Markdown(
-                "#### Step 6 — Render the sheet\n"
-                "Puts every locked panel together into one composite reference image. "
-                "You can render a preview at any point — panels you haven't locked "
+                "#### Step 6 — Assemble the reel\n"
+                "Puts every printed panel together into one composite reference sheet. "
+                "You can preview it at any point — panels you haven't printed "
                 "yet just show as a placeholder."
             )
-            render_btn = gr.Button("Render preview")
+            render_btn = gr.Button("Preview the reel")
             composite_image = gr.Image(label="Composite sheet preview", type="filepath")
             render_status = gr.Markdown("")
             render_btn.click(render_composite_preview, inputs=[entry_id, entry_type],
@@ -1238,9 +1357,9 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
             sheet_note = gr.Textbox(label="Note for this sheet version", lines=1,
                                      placeholder="e.g. 'first full pass, 9/13 panels'")
-            save_sheet_btn = gr.Button("🔒 Save as this entry's reference sheet", variant="primary")
-            save_sheet_status = gr.Markdown("")
-            save_sheet_btn.click(save_composite_ui, inputs=[entry_id, entry_type, composite_image, sheet_note],
+            save_sheet_btn = gr.Button("🎞️ Print the reel", variant="primary")
+            save_sheet_status = gr.HTML("")
+            save_sheet_btn.click(save_composite_ui_html, inputs=[entry_id, entry_type, composite_image, sheet_note],
                                   outputs=save_sheet_status)
 
         # --- Wiring for entry_type / stage / panel context awareness ---
@@ -1324,24 +1443,29 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
     with gr.Tab("📋 Registry"):
         gr.Markdown(
-            "Everything you've locked so far. Locking a new version of "
-            "something you've already named updates that entry and adds "
-            "your new note underneath the old one — it won't duplicate. The "
-            "Chained from column records continuity with an earlier locked shot or asset."
+            "## 🎞️ The screening room\n"
+            "Every take you've printed. Locking a new version of something "
+            "you've already named updates that entry and adds your new note "
+            "underneath the old one — it won't duplicate. The Chained from "
+            "column records continuity with an earlier locked shot or asset."
         )
         refresh_btn = gr.Button("Refresh")
+        registry_empty = gr.HTML(visible=False)
         registry_table = gr.Dataframe(
             headers=["Name", "Type", "Section", "Chained from", "Description", "Model", "Seed", "Locked", "Template", "Image path"],
             interactive=False,
         )
-        refresh_btn.click(registry_refresh, outputs=registry_table)
+        refresh_btn.click(registry_refresh, outputs=registry_table).then(registry_empty_state, outputs=registry_empty)
         demo.load(registry_refresh, outputs=registry_table)
+        demo.load(registry_empty_state, outputs=registry_empty)
 
-        gr.Markdown("#### 🖼️ Character & backdrop sheets")
+        gr.Markdown("#### 🖼️ Character, backdrop & prop sheets")
         sheets_refresh_btn = gr.Button("Refresh sheets")
+        sheets_empty = gr.HTML(visible=False)
         sheets_gallery = gr.Gallery(label="Rendered composite sheets", columns=3, height=300)
-        sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery)
+        sheets_refresh_btn.click(sheets_gallery_refresh, outputs=sheets_gallery).then(sheets_empty_state, outputs=sheets_empty)
         demo.load(sheets_gallery_refresh, outputs=sheets_gallery)
+        demo.load(sheets_empty_state, outputs=sheets_empty)
 
         gr.Markdown(
             "#### ⏱️ Beat timing\n"
@@ -1354,12 +1478,15 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             beats_file = gr.File(label="Beats JSON", file_types=[".json"])
             beats_import_btn = gr.Button("Import")
         beats_status = gr.Markdown("")
+        beats_empty = gr.HTML(visible=False)
         beats_table = gr.Dataframe(
             headers=["#", "Beat", "Start (s)", "End (s)", "Duration (s)", "Source", "Notes"],
             interactive=False,
         )
-        beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table])
+        beats_import_btn.click(import_beats_ui, inputs=beats_file, outputs=[beats_status, beats_table]).then(
+            beats_empty_state, outputs=beats_empty)
         demo.load(beats_table_refresh, outputs=beats_table)
+        demo.load(beats_empty_state, outputs=beats_empty)
 
 
     new_project_btn.click(lambda: gr.update(visible=True), outputs=new_project_group)
