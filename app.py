@@ -222,9 +222,9 @@ def harry_transcribe(audio_file):
         return gr.update(), f"⚠️ {error}"
 
 
-def harry_analyze(provider, title, source_text, source_id, audio_file):
+def harry_analyze(provider, title, source_text, source_id, audio_file, era=""):
     try:
-        plan = harry.analyze(provider, title, source_text, source_id, audio_file.name if audio_file else None)
+        plan = harry.analyze(provider, title, source_text, source_id, audio_file.name if audio_file else None, era)
         return plan, plan["summary"], "\n".join(f"• {question}" for question in plan["questions"]) or "Harry has no essential questions.", harry.plan_to_rows(plan), plan.get("source_path", ""), f"Harry recommended {len(plan['items'])} editable draft artifacts."
     except harry.HarryError as error:
         # NOTE: this branch previously returned 5 values against the success
@@ -233,7 +233,7 @@ def harry_analyze(provider, title, source_text, source_id, audio_file):
         return {}, "", "", [], "", f"⚠️ {error}"
 
 
-def harry_analyze_ui(provider, title, source_text, source_id, audio_file, text_file):
+def harry_analyze_ui(provider, title, source_text, source_id, audio_file, text_file, era=""):
     # Defensive auto-fill: attaching a document or audio file and going
     # straight to "Ask Harry" is the natural expectation -- don't make that
     # a dead end just because the separate Load/Transcribe button wasn't
@@ -262,7 +262,7 @@ def harry_analyze_ui(provider, title, source_text, source_id, audio_file, text_f
                 return {}, "", "", [], source_id, source_text, reward_card(msg)
 
     plan, summary, questions, rows, new_source_id, status = harry_analyze(
-        provider, title, source_text, source_id, audio_file)
+        provider, title, source_text, source_id, audio_file, era)
     return plan, summary, questions, rows, new_source_id, source_text, reward_card(prefix_status + status)
 
 
@@ -289,10 +289,11 @@ def harry_export_call_sheet_ui(title, rows, plan):
 
 def harry_start_over():
     """Explicit exit path back to a blank Harry tab -- clears the title,
-    source text, both file attachments, and every downstream result,
+    era, source text, both file attachments, and every downstream result,
     without needing to reload the whole app."""
     return (
         "",              # harry_title
+        "",              # harry_era
         "",              # harry_source
         None,            # harry_text_file
         None,            # harry_audio
@@ -1372,6 +1373,12 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             )
             with gr.Group(elem_classes=["step-card", "step-1"]):
                 harry_title = gr.Textbox(label="Project or story title", placeholder="e.g. Pig and Rooster")
+                harry_era = gr.Textbox(
+                    label="Era / setting (optional, but strongly recommended)",
+                    placeholder="e.g. early 20th century maritime, pre-automobile",
+                    info="Grounds every stage's inferences in the right period -- without this, "
+                         "'moved from field to ship' could just as easily infer a truck as a horse and cart.",
+                )
                 gr.HTML('<div class="harry-intake"><strong>Choose one source route:</strong> <strong>Option A — attach a text document</strong>, <strong>Option B — paste text</strong>, or <strong>Option C — attach narration audio</strong> and transcribe it locally. You may combine them when useful.</div>')
                 with gr.Row():
                     with gr.Group(elem_classes=["harry-source-option"]):
@@ -1416,13 +1423,13 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             harry_extract_btn.click(harry_extract_text, inputs=harry_text_file, outputs=[harry_source, harry_source_status])
             harry_save_btn.click(harry_save_source, inputs=[harry_title, harry_source, harry_audio], outputs=[harry_source_id, harry_source_status])
             harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
-            harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file],
+            harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file, harry_era],
                                 outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
             harry_goto_build_btn.click(lambda: gr.Tabs(selected="build"), outputs=main_tabs)
             harry_export_btn.click(harry_export_call_sheet_ui, inputs=[harry_title, harry_table, harry_plan], outputs=harry_export_btn)
             harry_reset_btn.click(
                 harry_start_over,
-                outputs=[harry_title, harry_source, harry_text_file, harry_audio, harry_source_id,
+                outputs=[harry_title, harry_era, harry_source, harry_text_file, harry_audio, harry_source_id,
                          harry_plan, harry_summary, harry_questions, harry_table,
                          harry_source_status, harry_status, harry_apply_status],
             )

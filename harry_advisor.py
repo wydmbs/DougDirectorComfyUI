@@ -24,6 +24,14 @@ OPENSCOUT_CONFIG = Path.home() / "OpenScout" / "openscout" / "config.yaml"
 HARRY_PERSONA = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
 Read the supplied script, story, poem, or narration transcript."""
 
+ERA_NOTE = """
+IF AN ERA/SETTING IS SPECIFIED, TREAT IT AS A HARD CONSTRAINT:
+Ground every visual detail, object, and technology in that era. Do not introduce anachronistic
+equipment (e.g. a motor vehicle in a pre-automobile setting, electric lighting in a candlelit era).
+When inferring something the text doesn't name outright, the era is exactly what should decide
+which real-world version of it is correct -- if animals are "moved from field to ship" in an era
+before motor transport, the era tells you that's a horse and cart, not a truck."""
+
 ITEM_SHAPE_NOTE = """Each item must have this exact shape:
 {
   "kind": "%s",
@@ -40,6 +48,7 @@ ITEM_SHAPE_NOTE = """Each item must have this exact shape:
 CHAR_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
 TASK: identify ONLY the characters in the material -- do not identify backdrops, props, or shots in this pass; those come in separate passes. Do not invent named people without textual evidence.
+{ERA_NOTE}
 
 Return JSON only, with this exact shape:
 {{"items": [ {ITEM_SHAPE_NOTE % ('CHAR', 'CHAR:snake_case')} ]}}"""
@@ -47,6 +56,9 @@ Return JSON only, with this exact shape:
 MASTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
 TASK: identify ONLY recurring backdrops/locations in the material (kind "MASTER") -- do not identify characters, props, or shots in this pass; those are handled separately. You will be told which characters were already identified in an earlier pass, for context only.
+{ERA_NOTE}
+
+A location the story clearly requires but never directly describes (e.g. a farmhouse implied by "farrow & field") MAY be suggested as a tentative item, but mark its continuity_note as "inferred, not explicit in source -- confirm before locking" so the director knows it's a suggestion, not something read directly off the page.
 
 Return JSON only, with this exact shape:
 {{"items": [ {ITEM_SHAPE_NOTE % ('MASTER', 'MASTER:snake_case')} ]}}"""
@@ -54,6 +66,7 @@ Return JSON only, with this exact shape:
 PROP_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
 TASK: identify ONLY recurring key objects/props in the material (kind "PROP") -- do not identify characters, backdrops, or shots in this pass; those are handled separately. You will be told which characters and backdrops were already identified in earlier passes, for context only.
+{ERA_NOTE}
 
 RECURRING PHYSICAL OBJECTS ARE PROPS, EVEN WHEN DESCRIBED POETICALLY:
 A recurring object central to multiple beats (a vehicle, a vessel, a key object the characters interact with repeatedly) warrants its own PROP entry even if the text never uses a single plain noun for it consistently -- reading "sail ship," "cargo hold," "the hull," and "a sleeping hulk" across a few lines is the same object described four ways, not four separate ideas. Do not require one literal name to appear before recommending something the narrative obviously depends on.
@@ -65,6 +78,7 @@ Return JSON only, with this exact shape:
 SHOT_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
 
 TASK: break the material into beats/scenes and produce shot drafts (kind "SHOT") -- one pass, focused entirely on scene coverage, since this is the task most likely to get shortchanged when asked alongside everything else. You will be told which characters, backdrops, and props were already identified in earlier passes -- reference them by name in shot descriptions/continuity notes for continuity, don't redefine them.
+{ERA_NOTE}
 
 SCENE/BEAT COVERAGE IS MANDATORY, NOT OPTIONAL:
 If the source text contains explicit section markers (bracketed headers like "< The Ship >", chapter titles, scene headings, or similarly clear structural breaks), treat each one as a beat and include at least one SHOT item for every single marked section -- do not silently skip a marked section because it seems minor or because you are trying to keep the list short. A missing beat is a more serious omission than a slightly longer list. If the source has no explicit markers, infer a reasonable beat structure yourself (opening, rising action, climax, resolution, etc.) and still cover it with SHOT items.
@@ -305,13 +319,14 @@ def _run_stage(provider, system_prompt, user_prompt, stage_name, warnings):
         return []
 
 
-def analyze(provider, title, source_text, source_path="", uploaded_path=None):
+def analyze(provider, title, source_text, source_path="", uploaded_path=None, era=""):
     if not source_text.strip():
         raise HarryError("Paste script/story text, or transcribe the uploaded audio first.")
     if not source_path:
         source_path = save_source(title, source_text, uploaded_path).get("source_id", "")
     notice = "The source stays local." if provider == "Ollama" else f"The source text will be sent to {provider} for this analysis."
-    base = f"PROJECT TITLE: {title or 'Untitled project'}\n\nSOURCE:\n{source_text}\n\n{notice}\n"
+    era_line = f"ERA / SETTING: {era}\n" if (era or "").strip() else ""
+    base = f"PROJECT TITLE: {title or 'Untitled project'}\n{era_line}\nSOURCE:\n{source_text}\n\n{notice}\n"
 
     # Four separate, focused passes instead of one call trying to do
     # everything at once. A single call asking for characters, backdrops,
@@ -359,7 +374,7 @@ def analyze(provider, title, source_text, source_path="", uploaded_path=None):
                    f"{len(prop_items)} prop(s), and {len(shot_items)} shot(s) across separate focused passes.")
 
     plan = {"summary": summary, "questions": questions + warnings, "items": all_items}
-    plan.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": title or "Untitled project", "provider": provider, "created_at": _timestamp(), "source_path": source_path})
+    plan.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": title or "Untitled project", "provider": provider, "era": era or "", "created_at": _timestamp(), "source_path": source_path})
     LIBRARY_DIR.mkdir(exist_ok=True)
     (LIBRARY_DIR / f"plan_{plan['plan_id']}.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
     return plan
@@ -403,6 +418,7 @@ def export_call_sheet(title, rows, plan):
     summary_sheet.append(["Title", title or "Untitled project"])
     summary_sheet.append(["Exported", _timestamp()])
     summary_sheet.append(["Provider", (plan or {}).get("provider", "")])
+    summary_sheet.append(["Era / setting", (plan or {}).get("era", "")])
     summary_sheet.append([])
     summary_sheet.append(["Harry's reading"])
     summary_sheet.append([(plan or {}).get("summary", "")])
