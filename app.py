@@ -208,9 +208,9 @@ def harry_extract_text(text_file):
     if not text.strip():
         return gr.update(), (
             "⚠️ That document loaded, but no readable text came out of it. Common causes: the content sits "
-            "inside a table or text box rather than the main document body (python-docx only reads body "
-            "paragraphs), the file is scanned images with no real text layer, or it's protected/encrypted. "
-            "Try Option B (paste the text directly) instead, or export the document differently."
+            "inside a text box or a caption/comment (still not read), the file is scanned images with no real "
+            "text layer, or it's protected/encrypted. Try Option B (paste the text directly) instead, or export "
+            "the document differently."
         )
     return text, "✅ Document text loaded. Review or edit it before asking Harry."
 

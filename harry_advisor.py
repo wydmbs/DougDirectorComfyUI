@@ -189,9 +189,31 @@ def extract_text_document(file_path):
     if suffix == ".docx":
         try:
             from docx import Document
+            from docx.oxml.ns import qn
+            from docx.table import Table
+            from docx.text.paragraph import Paragraph
         except ImportError as error:
             raise HarryError("Reading .docx needs python-docx. Install it with: pip install python-docx") from error
-        return "\n".join(paragraph.text for paragraph in Document(path).paragraphs).strip()
+        doc = Document(path)
+        parts = []
+        # Walk the document body in actual document order, handling both
+        # paragraphs AND tables. document.paragraphs alone only sees
+        # top-level body paragraphs -- text laid out in a table (a common
+        # choice for scripts/treatments, since it keeps character names
+        # and dialogue aligned) is otherwise silently invisible and
+        # extraction returns an empty string with no error at all.
+        for child in doc.element.body.iterchildren():
+            if child.tag == qn("w:p"):
+                para = Paragraph(child, doc)
+                if para.text.strip():
+                    parts.append(para.text)
+            elif child.tag == qn("w:tbl"):
+                table = Table(child, doc)
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+        return "\n".join(parts).strip()
     if suffix == ".pdf":
         try:
             from pypdf import PdfReader
