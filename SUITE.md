@@ -55,6 +55,14 @@ new piece against these before adding it:
   Harry rail and the "On set" panel in Build, rather than becoming a second app
   to launch. **His memory is the registry, not a transcript**, which is what
   makes a run resumable after a crash. See BUILD_LIST.md.
-- **Module 3 — not started.** Candidates: video generation (MiniMax H3
-  Ref2VA/FL2VA) or a QA/conformance reviewer. Whichever starts first should
-  extend the same registry rather than create its own.
+- **Module 3 — the model chain.** Three stages, each with a model chosen for a
+  reason: ChatGPT/DALL-E drafts, FLUX.1 Dev stages keyframes with IP-Adapter
+  holding the character's identity, and the clip stage routes by shot type
+  (Minimax H3 for performance, LTX-2.5 for camera, Runway Gen-4 for physics).
+  `model_pipeline.py` is the single declarative map so routing rules don't end
+  up scattered through prompt text. Per rule 1 the video stage adds columns to
+  the same Assets sheet — `keyframe_path`, `clip_path`, `motion_prompt`,
+  `video_model`, `shot_type` — rather than starting its own tracking file, and
+  existing registries migrate automatically.
+- **Module 4 — not started.** A QA/conformance reviewer is the obvious next
+  one; its verdicts should land in the same row's notes.

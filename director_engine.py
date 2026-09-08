@@ -95,15 +95,15 @@ def generation_label(entry_id: str, entry_type: str, build_stage: str, panel_key
 
 def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
              base_seed=None, n_variants: int = 4,
-             reference_image_path: str = "",
+             reference_image_path: str = "", scene_image_path: str = "",
              on_progress: Optional[Callable[[str], None]] = None) -> GenerationResult:
     """Render n variants, either mocked or through a live ComfyUI.
 
-    reference_image_path is accepted now and honoured only when the configured
-    reference-conditioning mode knows how to inject it -- see
-    reference_conditioning.py. Passing one while conditioning is off is not an
-    error; it is recorded as a warning so a run doesn't silently pretend the
-    reference was used.
+    reference_image_path is the character turnaround, which drives IP-Adapter so
+    the face survives into this composition. scene_image_path is the environment
+    concept, which anchors the background through img2img. Either can be passed
+    while conditioning is off; that isn't an error, but it is reported as a
+    warning so a run never silently pretends a reference was honoured.
     """
     base_seed = int(base_seed) if base_seed not in (None, "") else random.randint(0, 2**31 - 1)
     n_variants = max(1, min(int(n_variants), 8))
@@ -132,10 +132,10 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
 
         try:
             work = apply_node_overrides(workflow, cfg.node_mapping, prompt_positive, prompt_negative, seed)
-            if reference_image_path:
+            if reference_image_path or scene_image_path:
                 from reference_conditioning import apply_reference
-                work, note = apply_reference(work, cfg, reference_image_path)
-                if note:
+                work, note = apply_reference(work, cfg, reference_image_path, scene_image_path)
+                if note and note not in warnings:
                     warnings.append(note)
             prompt_id = client.queue_prompt(work)
             history = client.wait_for_completion(prompt_id)

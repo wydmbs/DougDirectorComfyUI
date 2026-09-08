@@ -13,20 +13,45 @@ Status keys: **[done]** shipped in this branch · **[next]** ready to start ·
 
 | | Decision | Status |
 |---|---|---|
-| D1 | **Flux 2 vs Nano Banana Pro** | **[open] — yours to make** |
+| D1 | **Image + video model chain** | **[done]** — see below |
 | D2 | Registry storage | **[done]** keep `.xlsx`, add write safety |
 | D3 | Where the agent runs | **[done]** worker thread inside the Gradio shell |
 | D4 | Autonomy posture | **[done]** three postures; installs always ask |
 
-**D1 is the one blocker left.** Without reference conditioning, "iterate on a
-character" means re-rolling a text prompt and hoping — Harry can't say *same
-pig, angrier*, only *a pig, angry* with a different seed. Every continuity
-guarantee falls back to prompt wording.
+## The model chain — baked in
 
-The seam is built (`reference_conditioning.py`) so the decision is now a config
-value, not a rewrite: `off` (today), `flux2` (injects into a `LoadImage` node),
-or `nano_banana` (attaches to an API-model node). Choosing late still means
-rebuilding workflows, so choose early.
+```
+DRAFT              KEYFRAME                    CLIP
+ChatGPT/DALL-E 3   FLUX.1 Dev FP8 (local)      Minimax H3   performance / dialogue
+concept sheets  →  IP-Adapter locks the    →   LTX-2.5      camera moves, cuts
+turnarounds        face; img2img anchors       Runway Gen-4 physics, destruction
+scene concepts     the scene
+```
+
+**D1 resolved: FLUX.1 Dev + IP-Adapter, not Nano Banana Pro.** Reference
+conditioning now defaults to `ipadapter` because without it every character
+quietly drifts between shots.
+
+| Stage | Model | Where | Cost | Notes |
+|---|---|---|---|---|
+| Draft | ChatGPT / DALL-E 3 | manual | subscription | Attached via `attach_draft`; no API or seed control |
+| Keyframe | FLUX.1 Dev FP8 | local | free, ~12–16GB | Needs `IPAdapterAdvanced` + `LoadImage` in the workflow |
+| Clip A | Minimax H3 REF2VA | cloud | credits, ≤15s | Takes keyframe **and** turnaround — why a head turn holds |
+| Clip B | LTX-2.5 | local | free, ~14GB | The workhorse: multi-shot cuts, tracking |
+| Clip C | Runway Gen-4 Turbo | cloud | credits, ≤5s | Only for physics local models fumble |
+
+**Routing** is automatic but advisory — `route_shot` returns a recommendation
+*and its reasoning*, because a wrong call wastes either credits or a take.
+Priority is physics → performance → camera: a melted face ruins a shot in a way
+a duller camera move does not.
+
+**Registry mapping** follows SUITE rule 1 — columns added to the same sheet, no
+side database: `keyframe_path`, `clip_path`, `motion_prompt`, `video_model`,
+`shot_type`. Existing registries migrate automatically (verified).
+
+---
+
+## 0. Decisions (original)
 
 ---
 
@@ -89,8 +114,29 @@ consequences, all good:
     `register_character` — all `[HARRY]`-tagged in the registry notes.
 15. **[open] `critique_variants` is a stub.** The tool and its call path exist,
     but with no critic configured it returns "pick on the evidence you have".
-    **This is the gap between goals 1 and 3.** A real critic needs a vision model
-    scoring variants against the locked concept — which needs D1 first.
+    **This is the gap between goals 1 and 3.** Now unblocked by D1: a real critic
+    is a vision model scoring variants against the locked draft. Next up.
+
+---
+
+## 3b. The pipeline — **[done]** *(the model chain)*
+
+| | | |
+|---|---|---|
+| **[done]** | `model_pipeline.py` | stages, model specs, shot routing, stage detection |
+| **[done]** | `reference_conditioning.py` | real IP-Adapter + img2img injection, rewritten for FLUX |
+| **[done]** | `video_client.py` | Minimax H3 / LTX-2.5 / Runway behind one interface |
+| **[done]** | registry columns | keyframe, clip, motion prompt, model, shot type |
+| **[done]** | `pipeline_tools.py` | 9 tools: map, stage, attach draft, route, plan, keyframe, lock, animate, check setup |
+
+Harry's system prompt now carries the pipeline, so he knows a clip is grown from
+a keyframe and a keyframe is anchored to a draft — and the tools enforce it
+(`animate_shot` refuses a shot with no keyframe, verified).
+
+**[next]** The cloud clients are written against each vendor's documented
+submit-and-poll shape but have **never been run against the live services**. The
+LTX path needs an exported API-format workflow. Both are structurally sound and
+factually unproven — treat first contact as a debugging session, not a formality.
 
 ---
 
@@ -153,12 +199,17 @@ production, not just Harry's work.
 | `test_registry_concurrency` | 8 threads × 6 writes | 48/48, 0 errors |
 | `test_shell_safety` | 34 command shapes | 0 failures |
 | `test_agent_loop` | 26 checks, 8 scenarios | 0 failures |
+| `test_pipeline` | 51 checks, 7 scenarios | 0 failures |
 | `test_app_smoke` | app builds + wiring | 0 failures |
 
-Run: `python tests\test_agent_loop.py` (each is standalone).
+Run: `python tests\test_pipeline.py` (each is standalone).
 
-**What is *not* verified:** no live LLM call, no live ComfyUI, no browser
-session. The handover's open item 1 — that no Harry prompt change has been
-validated against a real model — is still true, and now applies to the agent
-loop too. Items 5 (Phase 1) and a real Harry run are what convert this from
-sound to proven.
+**What is *not* verified:** no live LLM call, no live ComfyUI, no FLUX render, no
+Minimax / LTX / Runway call, no browser session. The handover's open item 1 —
+that no Harry prompt change has been validated against a real model — is still
+true, and now applies to the agent loop and the whole model chain too.
+
+The three things that convert this from sound to proven, in order:
+1. One real FLUX keyframe with IP-Adapter holding a face.
+2. One real clip from each of the three video routes.
+3. A real Harry run on the corrected poem.

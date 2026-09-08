@@ -25,12 +25,15 @@ __all__ = [
 ]
 
 
-def build_registry(cfg, generate_fn=None, critique_fn=None, run_command=None) -> ToolRegistry:
+def build_registry(cfg, generate_fn=None, critique_fn=None, run_command=None,
+                   video_fn=None) -> ToolRegistry:
     """The full tool set, bound to one config."""
     from .tools.comfy_tools import build_comfy_tools
     from .tools.director_tools import build_tools
+    from .tools.pipeline_tools import build_pipeline_tools
 
     registry = ToolRegistry()
     registry.extend(build_tools(cfg, generate_fn=generate_fn, critique_fn=critique_fn))
+    registry.extend(build_pipeline_tools(cfg, video_fn=video_fn))
     registry.extend(build_comfy_tools(cfg, run_command=run_command))
     return registry

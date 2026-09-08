@@ -20,6 +20,10 @@ ASSETS_COLUMNS = [
     "prompt_positive", "prompt_negative_add",
     "model", "seed", "reused_from", "locked", "image_path", "notes",
     "template", "composite_image_path",
+    # Pipeline stages beyond the concept draft. Added as columns on the same
+    # sheet rather than a second tracking file, per SUITE.md rule 1: the video
+    # module extends the registry, it does not fork it.
+    "keyframe_path", "clip_path", "motion_prompt", "video_model", "shot_type",
 ]
 
 PANELS_SHEET = "Panels"
@@ -175,6 +179,67 @@ def set_composite_image(path: str, entry_id: str, entry_type: str, template: str
         for column, value in values.items():
             worksheet.cell(row, _col_index(worksheet, column), value)
         save_workbook_atomic(workbook, path)
+
+
+def _update_asset_fields(path: str, entry_id: str, values: dict, note: str) -> None:
+    """Set named columns on one Assets row, creating it if needed.
+
+    Shared by the pipeline-stage writers so keyframes, clips and their metadata
+    all land on the same row as the concept rather than in a parallel file.
+    """
+    with registry_lock(path):
+        workbook = _open_or_create_workbook(path)
+        worksheet = _ensure_sheet(workbook, ASSETS_SHEET, ASSETS_COLUMNS)
+        id_col = _col_index(worksheet, "entry_id")
+        row = _find_row(worksheet, id_col, entry_id)
+        note_line = f"[{_timestamp()}] {note}" if note else ""
+
+        if row is None:
+            row = worksheet.max_row + 1
+            worksheet.cell(row, id_col, entry_id)
+            existing_notes = ""
+        else:
+            existing_notes = worksheet.cell(row, _col_index(worksheet, "notes")).value or ""
+
+        for column, value in values.items():
+            if value is not None:
+                worksheet.cell(row, _col_index(worksheet, column), value)
+
+        if note_line:
+            worksheet.cell(row, _col_index(worksheet, "notes"),
+                           (existing_notes + "\n" + note_line).strip() if existing_notes else note_line)
+        save_workbook_atomic(workbook, path)
+
+
+def set_keyframe(path: str, entry_id: str, keyframe_path: str, prompt_positive: str = "",
+                 seed=None, note: str = "") -> None:
+    """Record the staged FLUX keyframe -- the frame every clip grows from."""
+    _update_asset_fields(path, entry_id, {
+        "keyframe_path": keyframe_path,
+        "prompt_positive": prompt_positive or None,
+        "seed": seed,
+    }, note or "keyframe staged")
+
+
+def set_clip(path: str, entry_id: str, clip_path: str, motion_prompt: str = "",
+             video_model: str = "", shot_type: str = "", note: str = "") -> None:
+    """Record the finished clip and which model produced it."""
+    _update_asset_fields(path, entry_id, {
+        "clip_path": clip_path,
+        "motion_prompt": motion_prompt or None,
+        "video_model": video_model or None,
+        "shot_type": shot_type or None,
+    }, note or "clip generated")
+
+
+def set_shot_plan(path: str, entry_id: str, shot_type: str, video_model: str,
+                  motion_prompt: str = "", note: str = "") -> None:
+    """Record how a shot is intended to be animated, before it is."""
+    _update_asset_fields(path, entry_id, {
+        "shot_type": shot_type,
+        "video_model": video_model,
+        "motion_prompt": motion_prompt or None,
+    }, note or f"routed to {video_model}")
 
 
 def list_panels(path: str, entry_id: str) -> list:

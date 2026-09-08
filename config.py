@@ -44,6 +44,25 @@ class AzureConfig:
 
 
 @dataclass
+class VideoConfig:
+    """Where the clip-stage models live and what they're called.
+
+    Endpoints and model names are config rather than constants because these
+    services rename and re-version far faster than this app will be rebuilt.
+    """
+    minimax_url: str = "https://api.minimax.chat/v1"
+    minimax_model: str = "MiniMax-Hailuo-H3"
+    minimax_api_key_env: str = "MINIMAX_API_KEY"
+
+    ltx_workflow_path: str = ""
+
+    runway_url: str = "https://api.dev.runwayml.com/v1"
+    runway_model: str = "gen4_turbo"
+    runway_version: str = "2024-11-06"
+    runway_api_key_env: str = "RUNWAY_API_KEY"
+
+
+@dataclass
 class AgentConfig:
     """How much rope the assistant director gets when running on its own."""
     max_steps: int = 40
@@ -52,7 +71,10 @@ class AgentConfig:
     variants_per_generation: int = 4
     critique_enabled: bool = True
     max_iterations_per_asset: int = 3
-    reference_conditioning: str = "off"  # off | flux2 | nano_banana
+    # FLUX.1 Dev + IP-Adapter is the chosen keyframe path, so identity locking
+    # is on by default: without it every character quietly drifts between shots.
+    reference_conditioning: str = "ipadapter"
+    ipadapter_weight: float = 0.8
 
 
 @dataclass
@@ -67,6 +89,7 @@ class ToolchainConfig:
     active_project_id: str = ""
     azure: AzureConfig = field(default_factory=AzureConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    video: VideoConfig = field(default_factory=VideoConfig)
 
     def to_dict(self):
         d = asdict(self)
@@ -77,6 +100,7 @@ class ToolchainConfig:
         nm = d.get("node_mapping", {}) or {}
         az = d.get("azure", {}) or {}
         ag = d.get("agent", {}) or {}
+        vd = d.get("video", {}) or {}
         cfg = ToolchainConfig(
             comfyui_url=d.get("comfyui_url", "http://127.0.0.1:8188"),
             workflow_json_path=d.get("workflow_json_path", ""),
@@ -88,6 +112,7 @@ class ToolchainConfig:
             active_project_id=d.get("active_project_id", ""),
             azure=AzureConfig(**{k: v for k, v in az.items() if k in AzureConfig.__annotations__}) if az else AzureConfig(),
             agent=AgentConfig(**{k: v for k, v in ag.items() if k in AgentConfig.__annotations__}) if ag else AgentConfig(),
+            video=VideoConfig(**{k: v for k, v in vd.items() if k in VideoConfig.__annotations__}) if vd else VideoConfig(),
         )
         return cfg
 

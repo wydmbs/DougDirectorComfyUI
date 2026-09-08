@@ -144,6 +144,44 @@ once you've hand-built a workflow in ComfyUI's own UI, exported it via
   the image-building loop only; see `SUITE.md` for how a video module should
   plug into the same registry.
 
+## The model chain
+
+Three stages, each with a model chosen for a reason:
+
+```
+DRAFT              KEYFRAME                    CLIP
+ChatGPT/DALL-E 3   FLUX.1 Dev FP8 (local)      Minimax H3   performance, dialogue
+concept sheets  →  IP-Adapter locks the    →   LTX-2.5      camera moves, cuts
+turnarounds        face; img2img anchors       Runway Gen-4 physics, destruction
+scene concepts     the scene
+```
+
+**Drafting** happens in ChatGPT — prompt for a *"character concept sheet,
+multiple angles, front, side, back profile, flat studio lighting"* on a neutral
+background, and wide establishing shots for environments. Save the image and
+attach it with `attach_draft`; everything downstream anchors to it.
+
+**Keyframe staging** runs FLUX.1 Dev locally. The turnaround sheet drives
+IP-Adapter-Plus so the face survives into a new composition, and the scene
+concept anchors the background through img2img. Your workflow needs an
+`IPAdapterAdvanced` node fed by a `LoadImage` — run `check_reference_setup` and
+Harry will tell you whether yours can hold a character's identity.
+
+**Clips** route by what the shot actually needs:
+
+| Shot | Model | Where | Why |
+|---|---|---|---|
+| Dialogue, expression, head turns | Minimax H3 | cloud, ≤15s | REF2VA takes the keyframe **and** the turnaround, so a turning head doesn't melt |
+| Camera pans, tracking, cuts | LTX-2.5 | local, free | Fast, native multi-shot sequencing — the workhorse |
+| Explosions, water, shattering, cloth | Runway Gen-4 Turbo | cloud, ≤5s | Physics the open-weight models still fumble |
+
+Routing is automatic but advisory: `route_shot` gives a recommendation *and its
+reasoning*, and physics beats performance beats camera when a shot has more than
+one. Override it whenever you disagree.
+
+Set the video endpoints and keys in Setup. Keys are read from the environment
+(`MINIMAX_API_KEY`, `RUNWAY_API_KEY`) and never stored in the config file.
+
 ## Harry the assistant director
 
 Harry reads the source *and* executes the call sheet. He generates, judges the
