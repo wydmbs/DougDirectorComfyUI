@@ -277,7 +277,23 @@ def check_models(report, client, classes):
     flux_adapters = options("IPAdapterFluxLoader", "ipadapter")
     sd_adapters = options("IPAdapterModelLoader", "ipadapter_file")
     if flux_adapters:
-        report.add(section, OK, f"FLUX IP-Adapter model found: {flux_adapters[0]}")
+        # The node loads these with a bare torch.load, so a safetensors build
+        # is visible in the dropdown, selectable, and unloadable. Reporting the
+        # first filename we see would bless exactly the file that fails.
+        loadable = [a for a in flux_adapters
+                    if str(a).lower().endswith((".bin", ".pt", ".pth", ".ckpt"))]
+        if loadable:
+            report.add(section, OK,
+                       f"FLUX IP-Adapter model found: {loadable[0]}")
+        else:
+            report.add(section, FAIL,
+                       "The FLUX IP-Adapter model is in a format the node cannot read",
+                       f"Found {flux_adapters[0]}.",
+                       "ComfyUI-IPAdapter-Flux loads with torch.load, so it needs the\n"
+                       "pickle build, not safetensors. Download ip-adapter.bin from\n"
+                       "InstantX/FLUX.1-dev-IP-Adapter into ComfyUI/models/ipadapter-flux.\n"
+                       "Same weights, different container. Left as-is, renders fail with\n"
+                       "'invalid load key' -- an error that names neither file nor format.")
     elif "IPAdapterFluxLoader" in classes:
         report.add(section, FAIL,
                    "The FLUX IP-Adapter node is installed but has no model file", "",

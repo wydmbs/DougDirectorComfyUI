@@ -41,8 +41,12 @@ IPADAPTER_NODES = {
 # reproducing.
 IPADAPTER_FLUX_NODES = {
     "ApplyIPAdapterFlux": {"input": {"required": {"weight": ["FLOAT"]}}},
+    # Both containers of the same weights, as they appear on a real machine.
+    # The node reads only the pickle one; the safetensors is a decoy the UI
+    # happily offers.
     "IPAdapterFluxLoader": {"input": {"required": {
-        "ipadapter": [["instantx_flux1_dev_ip_adapter_bf16.safetensors"]]}}},
+        "ipadapter": [["instantx_flux1_dev_ip_adapter_bf16.safetensors",
+                       "ip-adapter.bin"]]}}},
 }
 
 VIDEO_NODES = {
@@ -64,6 +68,15 @@ PROFILES = {
         **BASE_NODES, **VIDEO_NODES,
         "ApplyIPAdapterFlux": IPADAPTER_FLUX_NODES["ApplyIPAdapterFlux"],
         "IPAdapterFluxLoader": {"input": {"required": {"ipadapter": [[]]}}},
+    },
+    # Node and model both present, but only in the safetensors container the
+    # node cannot open. Looks completely healthy; fails at render time with an
+    # unpickling error that mentions neither the file nor the format.
+    "flux_adapter_wrong_format": {
+        **BASE_NODES, **VIDEO_NODES,
+        "ApplyIPAdapterFlux": IPADAPTER_FLUX_NODES["ApplyIPAdapterFlux"],
+        "IPAdapterFluxLoader": {"input": {"required": {"ipadapter": [[
+            "instantx_flux1_dev_ip_adapter_bf16.safetensors"]]}}},
     },
     # IP-Adapter nodes installed but no model file downloaded.
     "no_model": {

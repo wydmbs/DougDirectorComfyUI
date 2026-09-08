@@ -169,6 +169,17 @@ def main():
     check("instantx_flux1_dev_ip_adapter" in output, "the fix names the exact file")
     shutil.rmtree(workdir, ignore_errors=True)
 
+    print("\n[3d] FLUX adapter model present but in the unreadable container")
+    workdir = setup_workdir()
+    full_workflow(os.path.join(workdir, "wf.json"))
+    _patch_workflow_path(workdir, "wf.json")
+    output = with_fake("flux_adapter_wrong_format", lambda: run_doctor(workdir))
+    check("cannot read" in output.lower(),
+          "a safetensors-only FLUX adapter is reported as blocking, not fine")
+    check("ip-adapter.bin" in output, "the fix names the file to download")
+    check("torch.load" in output, "it says why safetensors will not work")
+    shutil.rmtree(workdir, ignore_errors=True)
+
     print("\n[4] No FLUX checkpoint")
     workdir = setup_workdir()
     full_workflow(os.path.join(workdir, "wf.json"))
