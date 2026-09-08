@@ -19,7 +19,28 @@ LIBRARY_DIR = PROJECT_ROOT / "harry_library"
 def set_library_dir(path):
     global LIBRARY_DIR
     LIBRARY_DIR = Path(path)
-OPENSCOUT_CONFIG = Path.home() / "OpenScout" / "openscout" / "config.yaml"
+
+
+def _azure_settings():
+    """Azure settings come from this app's own config, edited in Setup.
+
+    Environment variables still win when present, so a machine that already
+    exports them doesn't need the config file filled in at all.
+    """
+    import config as cfgmod
+
+    cfg = cfgmod.load_config().azure
+    endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT") or cfg.endpoint
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT") or cfg.deployment
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION") or cfg.api_version
+    key = os.environ.get(cfg.api_key_env) or os.environ.get("AZURE_OPENAI_API_KEY")
+    return {
+        "endpoint": (endpoint or "").rstrip("/"),
+        "deployment": deployment or "",
+        "api_version": api_version or "2024-10-21",
+        "key": key or "",
+        "key_env": cfg.api_key_env,
+    }
 
 HARRY_PERSONA = """You are Harry the Advisor, a thoughtful pre-production advisor for AI-assisted film.
 Read the supplied script, story, poem, or narration transcript."""
@@ -103,22 +124,20 @@ def _slug(value):
     return "_".join(re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).split())
 
 
-def _load_openscout_config():
-    if not OPENSCOUT_CONFIG.exists():
-        raise HarryError(f"OpenScout config was not found at {OPENSCOUT_CONFIG}.")
-    with OPENSCOUT_CONFIG.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
-
-
 def provider_status(provider):
     provider = provider or "Claude"
     if provider == "Azure OpenAI":
-        try:
-            azure = _load_openscout_config().get("azure", {})
-            key = os.environ.get(azure.get("api_key_env", "AZURE_FOUNDRY_API_KEY"))
-            return "Azure OpenAI is ready through OpenScout." if azure.get("endpoint") and azure.get("deployment") and key else "Azure OpenAI settings or its environment key are unavailable to this app process."
-        except HarryError as error:
-            return str(error)
+        azure = _azure_settings()
+        if azure["endpoint"] and azure["deployment"] and azure["key"]:
+            return "Azure OpenAI is ready."
+        missing = []
+        if not azure["endpoint"]:
+            missing.append("endpoint")
+        if not azure["deployment"]:
+            missing.append("deployment")
+        if not azure["key"]:
+            missing.append(f"the {azure['key_env']} environment variable")
+        return "Azure OpenAI still needs " + ", ".join(missing) + " (set these in Setup)."
     env_map = {"Claude": "ANTHROPIC_API_KEY", "OpenAI": "OPENAI_API_KEY", "Grok": "XAI_API_KEY"}
     if provider == "Ollama":
         return "Ollama runs locally at its configured address; no material leaves this machine."
@@ -139,14 +158,16 @@ def _request(url, headers, payload, timeout=120):
 
 def _chat(provider, system_prompt, user_prompt):
     if provider == "Azure OpenAI":
-        azure = _load_openscout_config().get("azure", {})
-        key = os.environ.get(azure.get("api_key_env", "AZURE_FOUNDRY_API_KEY"))
+        azure = _azure_settings()
+        key = azure["key"]
         if not key:
-            raise HarryError("Azure API key is not available to this app process. Restart the app after setting the OpenScout Azure key environment variable.")
-        endpoint = azure.get("endpoint", "").rstrip("/")
+            raise HarryError("Azure API key is not available to this app process. Set %s and restart the app." % azure["key_env"])
+        if not azure["endpoint"] or not azure["deployment"]:
+            raise HarryError("Azure endpoint and deployment are not configured yet -- fill them in on the Setup tab.")
+        endpoint = azure["endpoint"]
         url = f"{endpoint}/openai/v1/chat/completions"
         response = _request(url, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {
-            "model": azure.get("deployment"), "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 5000,
+            "model": azure["deployment"], "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 5000,
         })
         return response["choices"][0]["message"]["content"]
     if provider == "Claude":

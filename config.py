@@ -27,6 +27,35 @@ class NodeMapping:
 
 
 @dataclass
+class AzureConfig:
+    """Azure OpenAI settings owned by this app.
+
+    Previously Harry read these out of an unrelated application's config file on
+    disk, which meant Azure silently stopped working on any machine that didn't
+    happen to have that other app installed. The harness owns its own settings.
+    """
+    endpoint: str = ""
+    deployment: str = ""
+    api_key_env: str = "AZURE_OPENAI_API_KEY"
+    api_version: str = "2024-10-21"
+
+    def is_ready(self) -> bool:
+        return bool(self.endpoint and self.deployment and os.environ.get(self.api_key_env))
+
+
+@dataclass
+class AgentConfig:
+    """How much rope the assistant director gets when running on its own."""
+    max_steps: int = 40
+    auto_lock: bool = False
+    auto_install: bool = False
+    variants_per_generation: int = 4
+    critique_enabled: bool = True
+    max_iterations_per_asset: int = 3
+    reference_conditioning: str = "off"  # off | flux2 | nano_banana
+
+
+@dataclass
 class ToolchainConfig:
     comfyui_url: str = "http://127.0.0.1:8188"
     workflow_json_path: str = ""
@@ -36,6 +65,8 @@ class ToolchainConfig:
     mock_mode: bool = True
     harry_provider: str = "Claude"
     active_project_id: str = ""
+    azure: AzureConfig = field(default_factory=AzureConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
 
     def to_dict(self):
         d = asdict(self)
@@ -44,6 +75,8 @@ class ToolchainConfig:
     @staticmethod
     def from_dict(d: dict) -> "ToolchainConfig":
         nm = d.get("node_mapping", {}) or {}
+        az = d.get("azure", {}) or {}
+        ag = d.get("agent", {}) or {}
         cfg = ToolchainConfig(
             comfyui_url=d.get("comfyui_url", "http://127.0.0.1:8188"),
             workflow_json_path=d.get("workflow_json_path", ""),
@@ -53,6 +86,8 @@ class ToolchainConfig:
             mock_mode=d.get("mock_mode", True),
             harry_provider=d.get("harry_provider", "Claude"),
             active_project_id=d.get("active_project_id", ""),
+            azure=AzureConfig(**{k: v for k, v in az.items() if k in AzureConfig.__annotations__}) if az else AzureConfig(),
+            agent=AgentConfig(**{k: v for k, v in ag.items() if k in AgentConfig.__annotations__}) if ag else AgentConfig(),
         )
         return cfg
 
