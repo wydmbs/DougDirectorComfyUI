@@ -65,8 +65,15 @@ class PermissionPolicy:
         """
         if not self.needs_confirmation(tool):
             return
-        if tool.name in self.session_grants:
+
+        # always_confirm has to mean *always*. A session grant earned by one
+        # harmless install must not silently cover every later command, or
+        # "installs always ask" becomes "installs ask once", which is exactly
+        # the assumption someone would be relying on when they walked away.
+        always = getattr(tool, "always_confirm", False)
+        if not always and tool.name in self.session_grants:
             return
+
         if ask is None:
             raise PermissionDenied(
                 f"'{tool.name}' needs the director's approval and nothing is available to ask. "
@@ -74,6 +81,9 @@ class PermissionPolicy:
             )
         decision = ask(request)
         if decision == Decision.ALLOW_SESSION:
+            if always:
+                # Honour it for this one call, but don't remember it.
+                return
             self.session_grants.add(tool.name)
             return
         if decision == Decision.ALLOW_ONCE:

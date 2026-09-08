@@ -33,7 +33,10 @@ DEFAULT_TIMEOUT = 2400
 IMAGE_LOADERS = ("LoadImage", "LoadImageFromPath")
 TEXT_NODES = ("CLIPTextEncode", "MinimaxTextPrompt", "RunwayTextPrompt", "String",
               "PrimitiveString", "LTXVTextPrompt")
-DURATION_KEYS = ("duration", "seconds", "length", "num_frames", "frames", "video_length")
+# Kept apart because they mean different things: writing a seconds value into a
+# frame count asks for a fifth of a second rather than five seconds.
+DURATION_SECONDS_KEYS = ("duration", "seconds", "length_seconds", "video_length_seconds")
+DURATION_FRAME_KEYS = ("num_frames", "frames", "length", "video_length", "frame_count")
 
 
 class VideoError(Exception):
@@ -74,15 +77,20 @@ def _find_all(workflow: dict, class_types) -> list:
 
 
 def _patch_workflow(workflow: dict, keyframe_ref: str, turnaround_ref: str,
-                    motion_prompt: str, seconds: float) -> list:
-    """Put this shot's inputs into the workflow. Returns warnings."""
-    warnings = []
+                    motion_prompt: str, seconds: float, fps: float = 24.0) -> tuple:
+    """Put this shot's inputs into the workflow.
+
+    Returns (warnings, fatal). `fatal` means the clip must not be submitted: it
+    would burn GPU time or cloud credits producing something unrelated to the
+    shot, which is worse than failing loudly.
+    """
+    warnings, fatal = [], []
 
     loaders = _find_all(workflow, IMAGE_LOADERS)
     if not loaders:
-        warnings.append(
-            "this workflow has no LoadImage node, so the keyframe was not applied -- "
-            "the clip will not be based on your staged frame")
+        fatal.append(
+            "this workflow has no LoadImage node, so the keyframe cannot be applied -- "
+            "the clip would not be based on your staged frame")
     else:
         loaders[0][1].setdefault("inputs", {})["image"] = keyframe_ref
         if turnaround_ref:
@@ -93,34 +101,73 @@ def _patch_workflow(workflow: dict, keyframe_ref: str, turnaround_ref: str,
                     "this workflow has only one LoadImage, so the turnaround sheet was not "
                     "passed -- add a second image input for REF2VA or a large head turn may drift")
 
-    text_nodes = _find_all(workflow, TEXT_NODES)
     if motion_prompt:
-        if not text_nodes:
-            warnings.append("no text node found, so the motion prompt was not applied")
-        for _, node in text_nodes:
-            inputs = node.setdefault("inputs", {})
+        # Only the first text node is treated as the positive prompt. Writing the
+        # motion prompt into every text node would overwrite the negative prompt
+        # with it, which quietly asks the model to avoid the very thing wanted.
+        text_nodes = _find_all(workflow, TEXT_NODES)
+        positive = [(nid, n) for nid, n in text_nodes
+                    if not _looks_negative(n)]
+        target = positive[0] if positive else (text_nodes[0] if text_nodes else None)
+        if target is None:
+            fatal.append("no text node found, so the motion prompt cannot be applied")
+        else:
+            inputs = target[1].setdefault("inputs", {})
             for key in ("text", "prompt", "value", "string"):
                 if isinstance(inputs.get(key), str):
                     inputs[key] = motion_prompt
                     break
+            else:
+                fatal.append("the text node has no writable text field")
+        if len(positive) > 1:
+            warnings.append(
+                f"{len(positive)} prompt nodes look positive; the motion prompt went to the "
+                f"first one only -- check the workflow if that's the wrong one")
 
     if seconds:
-        applied = False
+        applied = []
         for node in workflow.values():
             if not isinstance(node, dict):
                 continue
             inputs = node.get("inputs") or {}
-            for key in DURATION_KEYS:
+            for key in DURATION_SECONDS_KEYS:
                 if key in inputs and isinstance(inputs[key], (int, float)):
-                    inputs[key] = int(seconds) if key in ("num_frames", "frames") else seconds
-                    applied = True
-                    break
+                    inputs[key] = seconds
+                    applied.append(key)
+            for key in DURATION_FRAME_KEYS:
+                if key in inputs and isinstance(inputs[key], (int, float)):
+                    # Frames, not seconds. Writing 5 into a frame count asks for
+                    # five frames -- a fifth of a second -- rather than a 5s clip.
+                    node_fps = inputs.get("fps") or inputs.get("frame_rate") or fps
+                    inputs[key] = max(1, int(round(seconds * float(node_fps))))
+                    applied.append(f"{key}@{node_fps:g}fps")
         if not applied:
             warnings.append(
                 f"no duration field found, so the clip length is whatever the workflow "
                 f"is set to rather than {seconds:g}s")
 
-    return warnings
+    return warnings, fatal
+
+
+def _looks_negative(node: dict) -> bool:
+    """Is this text node the negative prompt?
+
+    Heuristic, but a cheap one: API-format exports keep the node's title, and
+    the existing text is usually a giveaway.
+    """
+    title = str((node.get("_meta") or {}).get("title") or "").lower()
+    if "negative" in title:
+        return True
+    inputs = node.get("inputs") or {}
+    for key in ("text", "prompt", "value", "string"):
+        value = inputs.get(key)
+        if isinstance(value, str) and value.strip():
+            lowered = value.lower()
+            if any(word in lowered for word in
+                   ("blurry", "low quality", "worst quality", "watermark", "deformed",
+                    "bad anatomy", "jpeg artifacts", "ugly")):
+                return True
+    return False
 
 
 def generate_mock(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
@@ -200,8 +247,14 @@ def generate_clip(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
                 "to work from -- a large head turn may drift")
 
         work = json.loads(json.dumps(workflow))
-        warnings.extend(_patch_workflow(work, keyframe_ref, turnaround_ref,
-                                        motion_prompt, seconds))
+        patch_warnings, fatal = _patch_workflow(work, keyframe_ref, turnaround_ref,
+                                                motion_prompt, seconds)
+        warnings.extend(patch_warnings)
+        if fatal:
+            # Better to stop than to spend GPU time or cloud credits rendering
+            # something that has nothing to do with the shot.
+            raise VideoError(
+                f"The {spec.name} workflow can't run this shot: " + "; ".join(fatal))
 
         if on_progress:
             on_progress(f"{spec.name} rendering on the GPU machine")

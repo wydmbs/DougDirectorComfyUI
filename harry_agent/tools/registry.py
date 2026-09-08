@@ -17,11 +17,34 @@ Two flags carry the safety semantics:
 
 import inspect
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from ..errors import ToolError
+
+# Openings that mean a handler is reporting a problem rather than a result.
+# Handlers here return prose, so this is how a refusal becomes an is_error the
+# model can actually react to.
+FAILURE_PREFIXES = (
+    "no entry", "no file", "no tool", "no workflow", "no backend", "no video",
+    "refused", "could not", "couldn't", "cannot", "can't", "failed",
+    "nothing came back", "no variants", "this shot routed to 'still'",
+)
+FAILURE_MARKERS = ("isn't a known", "isn't a shot type", "is not configured",
+                   "has no keyframe", "not found")
+
+
+def _looks_like_failure(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.strip().lower()
+    if not lowered:
+        return False
+    if lowered.startswith(FAILURE_PREFIXES):
+        return True
+    return any(marker in lowered[:200] for marker in FAILURE_MARKERS)
 
 
 @dataclass
@@ -84,6 +107,11 @@ class ToolRegistry:
         A tool raising is not a crash -- it is a result the model is told about
         so it can adapt, which is the whole point of a loop. Only genuinely
         unknown tool names are treated as a caller error.
+
+        Handlers that report a problem by *returning* a message rather than
+        raising are detected too. Otherwise a refusal reads to the provider as a
+        perfectly successful call, and the model has no signal to try something
+        else.
         """
         tool = self.get(name)
         if tool is None:
@@ -92,15 +120,50 @@ class ToolRegistry:
         started = time.time()
         try:
             filtered = self._filter_arguments(tool, arguments or {})
-            value = tool.handler(**filtered)
+            value = self._call_with_timeout(tool, filtered)
             content = value if isinstance(value, str) else json.dumps(value, default=str, indent=2)
-            return ToolResult(name, True, content, value, time.time() - started)
+            return ToolResult(name, not _looks_like_failure(value), content, value,
+                              time.time() - started)
+        except TimeoutError as error:
+            return ToolResult(name, False, str(error), None, time.time() - started)
         except Exception as error:  # noqa: BLE001 - reported to the model, not swallowed
             return ToolResult(
                 name, False,
                 f"{type(error).__name__}: {error}",
                 None, time.time() - started,
             )
+
+    @staticmethod
+    def _call_with_timeout(tool: "Tool", arguments: dict):
+        """Run the handler, giving up if it exceeds the tool's declared budget.
+
+        timeout_s used to be decorative metadata. A renderer that hangs would
+        block the worker thread forever, and the only way out was restarting the
+        app. The handler thread is left as a daemon rather than killed -- Python
+        can't safely kill a thread -- but the loop stops waiting on it.
+        """
+        budget = float(getattr(tool, "timeout_s", 0) or 0)
+        if budget <= 0:
+            return tool.handler(**arguments)
+
+        box = {}
+
+        def work():
+            try:
+                box["value"] = tool.handler(**arguments)
+            except BaseException as error:  # noqa: BLE001 - re-raised on the caller's thread
+                box["error"] = error
+
+        worker = threading.Thread(target=work, name=f"tool-{tool.name}", daemon=True)
+        worker.start()
+        worker.join(budget)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"'{tool.name}' was still running after {budget:.0f}s and was given up on. "
+                f"It may still be working in the background.")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     @staticmethod
     def _filter_arguments(tool: Tool, arguments: dict) -> dict:

@@ -116,6 +116,33 @@ def _resolve(image_path: str, upload) -> str:
     return upload(image_path)
 
 
+def _trace_to_loader(workflow: dict, node_id: str, input_key: str, depth: int = 0):
+    """Follow an input link back until an actual image loader is reached.
+
+    An IP-Adapter is rarely wired straight to a LoadImage -- there is usually a
+    resize, a mask, or a CLIPVision preprocessor in between. Writing a filename
+    into that intermediate node sets a field it doesn't have, and ComfyUI then
+    rejects the whole prompt. Following the chain finds the node that actually
+    reads a file.
+    """
+    if depth > 8 or not node_id:
+        return None, None
+    node = workflow.get(node_id)
+    if not isinstance(node, dict):
+        return None, None
+    if node.get("class_type") in LOAD_IMAGE_CLASSES:
+        return node_id, node
+
+    link = (node.get("inputs") or {}).get(input_key)
+    if not (isinstance(link, list) and link):
+        # Try any upstream image-ish input rather than giving up immediately.
+        for key, value in (node.get("inputs") or {}).items():
+            if isinstance(value, list) and value and key in ("image", "images", "pixels", "source"):
+                return _trace_to_loader(workflow, value[0], "image", depth + 1)
+        return None, None
+    return _trace_to_loader(workflow, link[0], "image", depth + 1)
+
+
 def _apply_ipadapter(workflow: dict, image_path: str, weight: float, upload=None) -> str:
     """Point the IP-Adapter's image input at the turnaround sheet."""
     adapter_id, adapter = _find(workflow, IPADAPTER_CLASSES)
@@ -126,19 +153,16 @@ def _apply_ipadapter(workflow: dict, image_path: str, weight: float, upload=None
 
     adapter.setdefault("inputs", {})["weight"] = float(weight)
 
-    # The adapter takes its image from a LoadImage node by reference. Find the
-    # one it is actually wired to, so a workflow with several loaders doesn't
-    # get the wrong one overwritten.
-    link = (adapter.get("inputs") or {}).get("image")
-    target_id = link[0] if isinstance(link, list) and link else None
-
     try:
         reference = _resolve(image_path, upload)
     except Exception as error:  # noqa: BLE001 - reported, never silently skipped
         return f"could not send the turnaround to ComfyUI, identity not locked: {error}"
 
-    if target_id and isinstance(workflow.get(target_id), dict):
-        workflow[target_id].setdefault("inputs", {})["image"] = reference
+    # Follow the adapter's image input back to whatever actually loads a file,
+    # rather than assuming it is wired directly to a LoadImage.
+    loader_id, loader = _trace_to_loader(workflow, adapter_id, "image")
+    if loader_id is not None:
+        loader.setdefault("inputs", {})["image"] = reference
         return ""
 
     loader_id, loader = _find(workflow, LOAD_IMAGE_CLASSES)
@@ -163,11 +187,10 @@ def _apply_img2img(workflow: dict, image_path: str, upload=None) -> str:
     except Exception as error:  # noqa: BLE001 - reported, never silently skipped
         return f"could not send the scene concept to ComfyUI, background not anchored: {error}"
 
-    link = (encode.get("inputs") or {}).get("pixels")
-    target_id = link[0] if isinstance(link, list) and link else None
-    if target_id and isinstance(workflow.get(target_id), dict):
-        workflow[target_id].setdefault("inputs", {})["image"] = reference
-        return ""
+    loader_id, loader = _trace_to_loader(workflow, encode_id, "pixels")
+    if loader_id is not None:
+        loader.setdefault("inputs", {})["image"] = reference
+        return _note_denoise(workflow)
 
     loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
     if not loaders:
@@ -177,6 +200,23 @@ def _apply_img2img(workflow: dict, image_path: str, upload=None) -> str:
     loader_id, loader = loaders[-1]
     loader.setdefault("inputs", {})["image"] = reference
     encode.setdefault("inputs", {})["pixels"] = [loader_id, 0]
+    return _note_denoise(workflow)
+
+
+def _note_denoise(workflow: dict) -> str:
+    """img2img only holds a scene when denoise is well below 1.
+
+    At denoise 1.0 the sampler discards the encoded latent entirely, so the
+    scene reference is present in the graph and absent from the result -- which
+    looks exactly like the reference not working.
+    """
+    for node in workflow.values():
+        if not isinstance(node, dict):
+            continue
+        denoise = (node.get("inputs") or {}).get("denoise")
+        if isinstance(denoise, (int, float)) and denoise >= 0.95:
+            return (f"the sampler's denoise is {denoise:g}, which discards the scene concept -- "
+                    f"drop it to about 0.5-0.7 for the background to actually hold")
     return ""
 
 

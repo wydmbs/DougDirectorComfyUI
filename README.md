@@ -223,6 +223,49 @@ Installing custom nodes or downloading models **always** asks, under every
 posture, and every proposed command passes the shell guard first. See
 `BUILD_LIST.md` for the design and what remains.
 
+## Known limits — read this before trusting Harry with a long run
+
+A design review found these. Fixed:
+
+- **Interpreters are no longer treated as read-only.** `python -c "shutil.rmtree(...)"`
+  previously classified as safe and would have run with no prompt at all.
+  Interpreters and multi-tools (`python`, `node`, `powershell`, `git -c alias…`)
+  now always need reading first.
+- **`always_confirm` really means always.** An "allow for this session" grant
+  used to cover every later install. It no longer does — the docs said installs
+  always ask, and now they do.
+- **Backups were fiction.** `backup_registry()` existed and was never called.
+  Every write now backs up first, and `restore_latest_backup()` rolls one back.
+- **Stale locks are only reclaimed when the owner is provably dead.** Age alone
+  isn't proof: a slow save over OneDrive looks identical to a crashed writer.
+- **Clip length no longer becomes frame count.** Five seconds was being written
+  into `num_frames`, asking for five frames — a fifth of a second.
+- **Negative prompts are no longer overwritten** with the motion prompt.
+- **The turnaround reaches the actual loader.** It used to write a filename into
+  whatever node the IP-Adapter was wired to, which is usually a preprocessor,
+  and ComfyUI would reject the prompt.
+- **Tool timeouts are enforced**, not decorative. A hung render no longer blocks
+  the worker thread forever.
+- **A handler returning "No entry called X" is reported as a failure**, so the
+  model can adapt instead of treating a refusal as success.
+- **A truncated model response is no longer reported as a finished run.**
+
+Still open, and worth knowing:
+
+- **Harry cannot see.** There is no vision critic, so he receives file paths, not
+  pictures. Locks made without one are stamped `unreviewed` in the registry.
+  Treat "Harry picked variant 3" as unverified until a critic exists.
+- **One run, one process.** The runner is process-global, so a second browser tab
+  shares the same run and the same consent prompts. Fine for one director at one
+  desk; not multi-user.
+- **Cancel stops between steps, not mid-render.** A 40-minute clip already in
+  flight finishes and is paid for.
+- **No stale-read detection.** If you replace a concept while Harry is generating
+  against the old one, his lock lands anyway. Compare-and-set isn't implemented.
+- **Output selection takes the first image node.** `save_image_node` is in the
+  config and not yet honoured, so a workflow with preview nodes may return the
+  wrong artefact.
+
 ## License
 
 Apache-2.0 (see `LICENSE`).

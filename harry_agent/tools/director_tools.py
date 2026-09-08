@@ -132,9 +132,24 @@ def build_tools(cfg, generate_fn=None, critique_fn=None) -> list:
     def critique_variants(entry_id: str, image_paths: list, criteria: str = "") -> str:
         """Judge candidates against the locked concept and continuity note."""
         if critique_fn is None:
-            return ("No critic is configured, so pick on the evidence you have and say why. "
-                    "Variant image paths: " + ", ".join(image_paths or []))
+            return ("No visual critic is configured, so nobody has actually LOOKED at these "
+                    "images -- you only have their filenames. Do not claim one is better on "
+                    "visual grounds. Either pick on non-visual evidence (seed, prompt, which "
+                    "panel it is) and say plainly that the choice is unverified, or ask the "
+                    "director to review the dailies. Variants: " + ", ".join(image_paths or []))
         return critique_fn(cfg, entry_id, image_paths, criteria)
+
+    def _blind_lock_note(note: str) -> str:
+        """Mark a lock made without anyone seeing the image.
+
+        Harry has no vision today: he receives paths, not pictures. Recording
+        that on the row is the difference between a decision and a guess that
+        looks like one six weeks from now.
+        """
+        if critique_fn is not None:
+            return note
+        marker = "unreviewed: no visual critic was configured, image not seen"
+        return f"{note} [{marker}]" if note else f"[{marker}]"
 
     # ------------------------------------------------------------- locking
 
@@ -144,13 +159,15 @@ def build_tools(cfg, generate_fn=None, critique_fn=None) -> list:
         return engine.lock_concept(
             cfg, entry_id, entry_type, beat, description, prompt_positive,
             prompt_negative, seed, image_path, reused_from,
-            note=f"[HARRY] {note}" if note else "[HARRY] locked by the assistant director")
+            note=_blind_lock_note(f"[HARRY] {note}" if note
+                                  else "[HARRY] locked by the assistant director"))
 
     def lock_panel(entry_id: str, panel_key: str, image_path: str, seed: int,
                    prompt_positive: str, prompt_negative: str = "", note: str = "") -> str:
         return engine.lock_panel(
             cfg, entry_id, panel_key, prompt_positive, prompt_negative, seed, image_path,
-            note=f"[HARRY] {note}" if note else "[HARRY] locked by the assistant director")
+            note=_blind_lock_note(f"[HARRY] {note}" if note
+                                  else "[HARRY] locked by the assistant director"))
 
     def render_sheet(entry_id: str, entry_type: str) -> str:
         path = engine.render_sheet(cfg, entry_id, entry_type)

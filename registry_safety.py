@@ -20,8 +20,10 @@ introducing a second store alongside it.
 
 import os
 import shutil
+import subprocess
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -44,52 +46,105 @@ def registry_lock(path: str, timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float
     """Exclusive cross-process lock for one registry file.
 
     Uses O_CREAT|O_EXCL, which is atomic on both Windows and POSIX, rather than
-    fcntl/msvcrt so the same code path works on either. A stale lock left behind
-    by a killed process is reclaimed after `timeout_s` so the app can never be
-    permanently wedged by a crash.
+    fcntl/msvcrt so the same code path works on either.
+
+    Reclaiming a stale lock is the delicate part. Age alone does not prove the
+    owner died -- a slow save over OneDrive can legitimately exceed the timeout --
+    so reclaim only happens when the recorded process is genuinely gone. Even
+    then, two waiters could both decide to reclaim, so ownership is verified
+    after acquiring: whoever finds someone else's token in the file backs off
+    rather than proceeding alongside them.
     """
     lock_file = _lock_path(path)
     os.makedirs(os.path.dirname(lock_file) or ".", exist_ok=True)
     started = time.time()
-    handle = None
+    token = f"{os.getpid()}:{uuid.uuid4().hex}"
+
     while True:
         try:
             handle = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            break
+            os.write(handle, token.encode("utf-8"))
+            os.close(handle)
         except FileExistsError:
-            waited = time.time() - started
-            if waited >= timeout_s:
-                # Reclaim a lock that is older than the timeout: the only way it
-                # can still exist is that its owner died without cleaning up.
-                try:
-                    age = time.time() - os.path.getmtime(lock_file)
-                except OSError:
-                    age = 0
-                if age >= timeout_s:
+            if time.time() - started >= timeout_s:
+                if _reclaimable(lock_file, timeout_s):
                     try:
                         os.unlink(lock_file)
-                        continue
                     except OSError:
                         pass
+                    started = time.time()  # give the retry a fresh budget
+                    continue
                 raise RegistryLockTimeout(
                     f"The registry stayed locked by another writer for {timeout_s:.0f}s: {path}"
                 )
             time.sleep(poll_s)
+            continue
+
+        # Confirm we still own what we just created. If a racing reclaimer
+        # deleted our lock and wrote its own, back off instead of both of us
+        # believing we hold it -- that is the corruption this exists to stop.
+        if _owner_of(lock_file) != token:
+            time.sleep(poll_s)
+            continue
+        break
+
     try:
-        os.write(handle, str(os.getpid()).encode("utf-8"))
-        os.close(handle)
-        handle = None
         yield
     finally:
-        if handle is not None:
+        if _owner_of(lock_file) == token:
             try:
-                os.close(handle)
+                os.unlink(lock_file)
             except OSError:
                 pass
+
+
+def _owner_of(lock_file: str) -> str:
+    try:
+        with open(lock_file, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def _process_alive(pid: int) -> bool:
+    """Best-effort liveness check. Unknown is treated as alive, because wrongly
+    declaring a live writer dead is what corrupts the file."""
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import subprocess
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, timeout=10)
+            return str(pid) in (result.stdout or "")
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True          # exists, owned by someone else
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    except Exception:        # noqa: BLE001 - unknown means assume alive
+        return True
+
+
+def _reclaimable(lock_file: str, timeout_s: float) -> bool:
+    """A lock may be taken over only when its owner is provably gone."""
+    owner = _owner_of(lock_file)
+    if not owner:
+        # No token at all: an old-format or truncated lock. Fall back to age.
         try:
-            os.unlink(lock_file)
+            return (time.time() - os.path.getmtime(lock_file)) >= timeout_s
         except OSError:
-            pass
+            return True
+    pid_text = owner.split(":", 1)[0]
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    if pid == os.getpid():
+        return False         # our own lock; never steal from ourselves
+    return not _process_alive(pid)
 
 
 def backup_registry(path: str, tag: str = "") -> str:
@@ -108,11 +163,22 @@ def backup_registry(path: str, tag: str = "") -> str:
     return dest
 
 
+def _backup_sort_key(path: str):
+    """Sort by the timestamp in the filename, not mtime.
+
+    Filesystem timestamps are coarse enough on Windows that two backups written
+    a few milliseconds apart can tie, leaving their order undefined -- so
+    "restore the most recent" could quietly restore the wrong one. The name
+    carries microseconds and sorts lexicographically.
+    """
+    return (os.path.basename(path), os.path.getmtime(path))
+
+
 def _prune_backups(folder: str, keep: int = BACKUP_KEEP) -> None:
     try:
         entries = sorted(
             (os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".xlsx")),
-            key=os.path.getmtime,
+            key=_backup_sort_key,
             reverse=True,
         )
     except OSError:
@@ -124,14 +190,24 @@ def _prune_backups(folder: str, keep: int = BACKUP_KEEP) -> None:
             pass
 
 
-def save_workbook_atomic(workbook, path: str) -> None:
+def save_workbook_atomic(workbook, path: str, backup: bool = True) -> None:
     """Save to a temp file in the same directory, then replace.
 
     os.replace is atomic within a filesystem, so a reader either sees the whole
     previous workbook or the whole new one -- never a partially written file.
+
+    The previous version is copied aside first. Backups were originally written
+    but never called, which meant the recovery story was fiction: atomic replace
+    protects against a *crash* mid-write, but nothing protected against a write
+    that succeeded and was wrong.
     """
     folder = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(folder, exist_ok=True)
+    if backup:
+        try:
+            backup_registry(path)
+        except OSError:
+            pass  # a failed backup must not block the save itself
     handle, temp_path = tempfile.mkstemp(suffix=".xlsx", prefix=".registry_", dir=folder)
     os.close(handle)
     try:
@@ -143,3 +219,17 @@ def save_workbook_atomic(workbook, path: str) -> None:
         except OSError:
             pass
         raise
+
+
+def restore_latest_backup(path: str) -> str:
+    """Put the most recent backup back. Returns the backup used, or ""."""
+    folder = os.path.join(os.path.dirname(os.path.abspath(path)) or ".", BACKUP_DIRNAME)
+    if not os.path.isdir(folder):
+        return ""
+    candidates = sorted(
+        (os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(".xlsx")),
+        key=_backup_sort_key, reverse=True)
+    if not candidates:
+        return ""
+    shutil.copy2(candidates[0], path)
+    return candidates[0]

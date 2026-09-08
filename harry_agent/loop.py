@@ -26,7 +26,7 @@ from typing import Callable, List, Optional
 
 from .errors import Cancelled, PermissionDenied, ProviderError, StepLimitReached
 from .permissions import PermissionRequest
-from .providers.base import STOP_TOOL_USE
+from .providers.base import STOP_LENGTH, STOP_TOOL_USE
 from .trust import TRUST_RULE
 
 SYSTEM_PROMPT = """You are Harry, the assistant director on an AI-assisted film production.
@@ -40,6 +40,9 @@ HOW YOU WORK
 - Work one asset at a time. Finish it before starting another.
 - After anything that changes the project, move on. Don't re-read what you just wrote.
 - When you judge variants, say plainly why one wins. That reasoning is kept.
+- You CANNOT see images. Tools give you file paths, not pictures. Never claim one
+  variant looks better than another; if no visual critic is configured, say the
+  choice is unverified, or hand the dailies to the director.
 - If a tool fails, read the error and adapt. Don't repeat the same call unchanged.
 - When the goal is met, say so clearly and stop calling tools.
 
@@ -162,6 +165,15 @@ class AgentLoop:
             if turn.text:
                 events.append(self._emit("text", turn.text, step=step))
 
+            # A response cut off by the token limit is not a finished answer.
+            # Treating it as one silently reports success on a half-formed plan.
+            if turn.stop_reason == STOP_LENGTH and not turn.wants_tools:
+                error = ("The model ran out of room mid-answer. Raise the token budget, "
+                         "or give Harry a narrower goal.")
+                events.append(self._emit("error", error, step=step))
+                self._record(run_id, "truncated", summary=error, ok=False)
+                return RunResult(run_id, False, step, turn.text or "", events, error)
+
             if not turn.wants_tools or turn.stop_reason != STOP_TOOL_USE:
                 summary = turn.text or "Finished."
                 completed = True
@@ -178,6 +190,14 @@ class AgentLoop:
 
             result_blocks = []
             for call in turn.tool_calls:
+                # Checked per call, not just per step: a turn can carry several
+                # tool calls, and after Cut is pressed the rest of them should
+                # not run. Every tool_use still needs a matching tool_result or
+                # the next request is rejected, so skipped ones are answered.
+                if self._cancelled:
+                    result_blocks.append(self._result_block(
+                        call.id, "Stopped by the director before this ran.", error=True))
+                    continue
                 block = self._invoke(run_id, call, events, step)
                 result_blocks.append(block)
             messages.append({"role": "user", "content": result_blocks})
@@ -205,12 +225,18 @@ class AgentLoop:
         Tool calls and their results must stay paired or providers reject the
         request, so the cut is made on a user message boundary and the first
         message is always kept for the goal.
+
+        The floor of 4 matters: below that, `messages[-(n-1):]` degenerates
+        (at n=1 the slice is [-0:], which is the whole list, so the bound
+        silently stops applying) and at n=2 everything but the goal is dropped,
+        leaving the model unable to see its own last tool call.
         """
-        if len(messages) <= self.history_turns:
+        keep = max(4, int(self.history_turns))
+        if len(messages) <= keep:
             return messages
         head = messages[:1]
-        tail = messages[-(self.history_turns - 1):]
-        while tail and not (tail[0].get("role") == "assistant"):
+        tail = messages[-(keep - 1):]
+        while tail and tail[0].get("role") != "assistant":
             tail = tail[1:]
         return head + tail
 

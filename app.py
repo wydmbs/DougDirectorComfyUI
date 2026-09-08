@@ -919,7 +919,9 @@ def harry_agent_poll():
 def harry_agent_stop():
     if HARRY_RUNNER:
         HARRY_RUNNER.cancel()
-    return harry_rail_html(), reward_card("🛑 Harry stopped. Nothing half-written was left behind.")
+    return harry_rail_html(), reward_card(
+        "🛑 Cut. Harry will stop after the step he is on — anything already "
+        "rendering finishes rather than being abandoned half-written.")
 
 
 def harry_agent_answer(allow_session):

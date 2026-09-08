@@ -196,24 +196,29 @@ def scenario_workflow_patching():
         "4": {"class_type": "LTXVImgToVideo", "inputs": {"duration": 3.0}},
         "5": {"class_type": "VHS_VideoCombine", "inputs": {}},
     }
-    warnings = video_client._patch_workflow(
+    warnings, fatal = video_client._patch_workflow(
         workflow, "up/keyframe.png", "up/turnaround.png", "the pig turns to camera", 8.0)
     check(workflow["1"]["inputs"]["image"] == "up/keyframe.png", "the keyframe went to the first loader")
     check(workflow["2"]["inputs"]["image"] == "up/turnaround.png", "the turnaround went to the second")
     check(workflow["3"]["inputs"]["text"] == "the pig turns to camera", "the motion prompt landed")
     check(workflow["4"]["inputs"]["duration"] == 8.0, "the duration landed")
-    check(not warnings, f"no warnings for a complete workflow (got {warnings})")
+    check(not warnings and not fatal, f"nothing flagged for a complete workflow ({warnings}{fatal})")
 
-    # One loader means REF2VA has nothing to hold the face with -- say so.
-    single = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}}}
-    warnings = video_client._patch_workflow(single, "kf.png", "turn.png", "", 0)
+    # One loader means REF2VA has nothing to hold the face with -- say so, but
+    # it is a warning rather than fatal, since the clip is still worth making.
+    single = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
+              "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}}}
+    warnings, fatal = video_client._patch_workflow(single, "kf.png", "turn.png", "x", 0)
     check(any("turnaround" in w for w in warnings),
           "a single-loader workflow warns that the turnaround wasn't passed")
+    check(not fatal, "a missing turnaround is not fatal")
 
+    # No image input at all is fatal: the clip would have nothing to do with
+    # the staged frame, and cloud routes cost real money.
     none = {"1": {"class_type": "KSampler", "inputs": {}}}
-    warnings = video_client._patch_workflow(none, "kf.png", "", "", 0)
-    check(any("LoadImage" in w for w in warnings),
-          "a workflow with no image input warns that the keyframe wasn't applied")
+    warnings, fatal = video_client._patch_workflow(none, "kf.png", "", "x", 0)
+    check(any("LoadImage" in f for f in fatal),
+          "a workflow with no image input is fatal, not just a warning")
 
 
 def scenario_tools(cfg):

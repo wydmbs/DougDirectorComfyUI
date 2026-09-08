@@ -47,19 +47,47 @@ class SafetyResult:
 
 
 # Commands that only look at the world.
+#
+# Interpreters and extensible tools are deliberately NOT here. `python -c` can
+# do anything a shell can, and git can be handed an alias that shells out, so
+# treating either as read-only because its usual use is harmless would let
+# `python -c "shutil.rmtree(...)"` through without so much as a prompt.
 READ_ONLY_HEADS = {
     "dir", "ls", "pwd", "cd", "type", "cat", "head", "tail", "findstr", "grep",
     "where", "which", "echo", "get-content", "get-childitem", "get-location",
-    "test-path", "select-string", "measure-object", "python", "py", "nvidia-smi",
-    "git", "pip", "conda",
+    "test-path", "select-string", "measure-object", "nvidia-smi",
 }
 
-# Sub-commands that make an otherwise read-only head mutating.
+# Interpreters and multi-tools: what they do depends entirely on their
+# arguments, so they always need a human to read the command first.
+INTERPRETER_HEADS = {
+    "python", "python3", "py", "pythonw", "node", "deno", "bun", "ruby", "perl",
+    "php", "powershell", "pwsh", "cmd", "sh", "bash", "zsh", "wsl", "npx",
+    "uv", "uvx", "pipx", "irb", "iex", "invoke-expression", "start-process",
+}
+
+# Sub-commands that make an otherwise informational tool mutating. The tool
+# itself is never read-only outright, because these all accept extension points
+# (git aliases, pip install hooks) that can run arbitrary code.
 MUTATING_SUBCOMMANDS = {
     "git": {"clone", "pull", "push", "checkout", "reset", "clean", "rm", "merge", "rebase"},
     "pip": {"install", "uninstall", "download"},
     "conda": {"install", "remove", "update", "create"},
 }
+
+# Read-only sub-commands of those same tools, allowed only when no argument
+# looks like an extension point.
+READ_ONLY_SUBCOMMANDS = {
+    "git": {"status", "log", "diff", "show", "branch", "remote", "rev-parse", "ls-files"},
+    "pip": {"list", "show", "freeze"},
+    "conda": {"list", "info", "env"},
+}
+
+# Arguments that turn an otherwise safe sub-command into arbitrary execution.
+EXTENSION_POINT = re.compile(
+    r"(^|\s)(-c\b|--exec\b|-c=|--upgrade-command|alias\.|--config\s+alias|"
+    r"core\.(pager|editor|sshCommand)|--ext-diff|-c\s+alias)",
+    re.IGNORECASE)
 
 DESTRUCTIVE_ROOTS = re.compile(
     # The prefix allows ':' so a drive-qualified system path (C:\Windows) is
@@ -206,13 +234,29 @@ def _judge_one(part: str) -> SafetyResult:
     if head in BLOCKED_HEADS:
         return SafetyResult(Verdict.BLOCKED, f"'{head}' can destroy storage or force a shutdown", part)
 
+    if head in INTERPRETER_HEADS:
+        return SafetyResult(
+            Verdict.NEEDS_CONSENT,
+            f"'{head}' runs whatever it is given, so this needs reading before it runs", part)
+
     if head in MUTATING_SUBCOMMANDS:
         sub = next((token.lower() for token in rest if not token.startswith("-")), "")
+        if EXTENSION_POINT.search(part):
+            return SafetyResult(
+                Verdict.NEEDS_CONSENT,
+                f"this {head} command can run arbitrary code through an alias or hook", part)
         if sub in MUTATING_SUBCOMMANDS[head]:
             return SafetyResult(Verdict.NEEDS_CONSENT, f"{head} {sub} changes this machine", part)
-        return SafetyResult(Verdict.READ_ONLY, f"{head} query", part)
+        if sub in READ_ONLY_SUBCOMMANDS.get(head, set()):
+            return SafetyResult(Verdict.READ_ONLY, f"{head} {sub} only reports", part)
+        return SafetyResult(Verdict.NEEDS_CONSENT, f"'{head} {sub}' isn't a known read-only form", part)
 
     if head in READ_ONLY_HEADS:
+        # A read-only head piped into something mutating is not read-only. The
+        # whole-line pipeline check catches the worst of these, but a pipeline
+        # ending in a delete has to be caught here too.
+        if RECURSIVE_DELETE.search(lowered) or STOP_PROCESS.search(lowered):
+            return SafetyResult(Verdict.NEEDS_CONSENT, "feeds into a destructive command", part)
         return SafetyResult(Verdict.READ_ONLY, "reads only", part)
 
     return SafetyResult(Verdict.NEEDS_CONSENT, f"'{head}' isn't a recognised safe command", part)

@@ -44,14 +44,27 @@ MUST_ASK = [
     "reg add HKCU\\Software\\Test /v A /d 1",
     "some_unknown_installer.exe --silent",
     "conda install pytorch",
+    # Interpreters do whatever their arguments say, so they are never read-only.
+    'python -c "import shutil; shutil.rmtree(\'C:/Users\')"',
+    'py -c "print(1)"',
+    "python train.py",
+    "node build.js",
+    "powershell -Command Get-Date",
+    "bash setup.sh",
+    "npx some-tool",
+    # Extension points that smuggle execution into an otherwise dull command.
+    "git -c alias.x='!powershell -c evil' x",
+    "git -c core.pager='!sh -c evil' log",
+    # A read-only head feeding something destructive.
+    "Get-ChildItem C:\\ | Remove-Item -Recurse -Force",
 ]
 
 MUST_BE_READ_ONLY = [
     "git status",
+    "git log --oneline",
     "dir",
     "Get-ChildItem .\\models",
     "nvidia-smi",
-    "python -c \"import torch; print(torch.__version__)\"",
     "pip list",
     "Test-Path .\\ComfyUI\\custom_nodes",
 ]

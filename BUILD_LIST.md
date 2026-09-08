@@ -214,13 +214,50 @@ production, not just Harry's work.
 | Suite | Covers | Result |
 |---|---|---|
 | `test_registry_concurrency` | 8 threads × 6 writes | 48/48, 0 errors |
-| `test_shell_safety` | 34 command shapes | 0 failures |
+| `test_shell_safety` | 44 command shapes | 0 failures |
 | `test_agent_loop` | 26 checks, 8 scenarios | 0 failures |
 | `test_pipeline` | 51 checks, 7 scenarios | 0 failures |
 | `test_remote_gpu` | 40 checks, 6 scenarios | 0 failures |
+| `test_review_fixes` | 32 checks, 10 scenarios | 0 failures |
 | `test_app_smoke` | app builds + wiring | 0 failures |
 
-Run: `python tests\test_remote_gpu.py` (each is standalone).
+Run: `python tests\test_review_fixes.py` (each is standalone).
+
+---
+
+## What a design review found
+
+Worth recording, because several of these were invisible to a green test suite.
+
+**Fixed:**
+
+| Severity | Defect |
+|---|---|
+| Critical | `python -c "shutil.rmtree(...)"` classified as **read-only** — it would have run with no prompt. Interpreters and multi-tools are never read-only now. |
+| Critical | An "allow for this session" grant defeated `always_confirm`, so installs asked once rather than always — contradicting the documented guarantee. |
+| Critical | `backup_registry()` was written and **never called**. Atomic replace protects against a crash mid-write; nothing protected against a write that succeeded and was wrong. |
+| High | Stale locks were reclaimed on **age alone**, which doesn't prove the owner died. A slow save could have its lock stolen mid-write. |
+| High | Clip duration in seconds was written into **frame-count** fields: 5s became 5 frames. |
+| High | The motion prompt overwrote **every** text node, including the negative prompt. |
+| High | The turnaround was written into whatever node the IP-Adapter linked to — usually a preprocessor, which ComfyUI rejects. Now traced back to the real loader. |
+| High | `Tool.timeout_s` was decorative; a hung render blocked the worker thread forever. |
+| High | Handlers reporting failure by *returning* a message were marked `ok=True`, so the model saw a refusal as success. |
+| Medium | A response truncated by the token limit was reported as a completed run. |
+| Medium | Backups sorted by `mtime`, which ties on Windows for rapid writes — "restore the latest" could restore the wrong one. Found as a 1-in-8 test flake. |
+
+**Open, and documented in the README rather than quietly carried:**
+
+- **Harry cannot see.** No vision critic; he gets paths, not pictures. Locks made
+  without one are now stamped `unreviewed` in the registry, and his system prompt
+  forbids claiming one variant looks better.
+- **"The registry is the memory" was overclaimed.** He re-reads state only when
+  the model calls a read tool. Candidate paths from a generation live in the
+  transcript, so a crash between generating and locking loses them. The
+  resumability claim holds for *locked* work, not for work in flight.
+- One run per process; a second browser tab shares it.
+- Cancel stops between steps, not mid-render.
+- No stale-read detection (no compare-and-set on locking).
+- `save_image_node` is configured but not honoured when picking outputs.
 
 **What is *not* verified:** no live LLM call, no live ComfyUI, no FLUX render, no
 Minimax / LTX / Runway clip, no browser session. The handover's open item 1 —
