@@ -1028,6 +1028,49 @@ def save_video_workflows(ltx_path, minimax_path, runway_path):
     return reward_card("💾 Saved.")
 
 
+def run_doctor_html():
+    """Run the preflight in-process and render it for the Setup tab.
+
+    Same checks as `python doctor.py`, so there is one answer to "why won't it
+    render" rather than a UI version and a command-line version that can drift.
+    """
+    import io as _io
+    import contextlib
+
+    try:
+        import doctor
+    except ImportError:
+        return reward_card("⚠️ doctor.py is missing from the project folder.")
+
+    buffer = _io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buffer):
+            report = doctor.Report()
+            doctor.check_python(report)
+            doctor.check_config(report, CFG)
+            doctor.check_harry_provider(report, CFG)
+            client, classes = doctor.check_comfy(report, CFG)
+            doctor.check_models(report, client, classes)
+            doctor.check_workflow(report, CFG, classes)
+            doctor.check_video(report, CFG, classes)
+            doctor.check_registry(report, CFG)
+            report.render()
+    except Exception as error:  # noqa: BLE001
+        return reward_card(f"⚠️ The preflight itself failed: {error}")
+
+    text = buffer.getvalue()
+    blocking = sum(1 for r in report.rows if r[1] == doctor.FAIL)
+    tone = "warn" if blocking else "win"
+    headline = ("Nothing is blocking a render." if not blocking
+                else f"{blocking} thing{'s' if blocking != 1 else ''} to fix before this renders.")
+    escaped = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    return (f'<div class="reward-card {tone}"><strong>{headline}</strong>'
+            f'<pre style="margin:10px 0 0 0;padding:10px;background:#fffdf9;'
+            f'border:1px solid #e2ddd2;border-radius:8px;font-size:11.5px;'
+            f'line-height:1.5;max-height:420px;overflow:auto;white-space:pre-wrap;">'
+            f'{escaped}</pre></div>')
+
+
 def gpu_status_html():
     """Where the rendering will actually happen, and whether it can."""
     from video_client import readiness
@@ -1593,7 +1636,10 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                     "images are uploaded to it, so a remote box works exactly like a local one."
                 )
                 gpu_status = gr.HTML(gpu_status_html())
-                gpu_refresh_btn = gr.Button("↻ Check the GPU machine", size="sm")
+                with gr.Row():
+                    gpu_refresh_btn = gr.Button("↻ Check the GPU machine", size="sm")
+                    doctor_btn = gr.Button("🩺 Full preflight", size="sm", variant="primary")
+                doctor_out = gr.HTML("")
                 with gr.Row():
                     ltx_workflow = gr.Textbox(label="LTX-2.5 workflow (API format)",
                                               value=CFG.video.ltx_workflow_path,
@@ -2046,6 +2092,7 @@ if __name__ == "__main__":
 
     # ------------------------------------------------------- the GPU machine
     gpu_refresh_btn.click(gpu_status_html, outputs=gpu_status)
+    doctor_btn.click(run_doctor_html, outputs=doctor_out)
     video_save_btn.click(
         save_video_workflows,
         inputs=[ltx_workflow, minimax_workflow, runway_workflow],

@@ -144,6 +144,25 @@ once you've hand-built a workflow in ComfyUI's own UI, exported it via
   the image-building loop only; see `SUITE.md` for how a video module should
   plug into the same registry.
 
+## Getting started
+
+New machine, or renders not working? **Run the preflight.** It changes nothing
+and tells you the single next thing to fix:
+
+```powershell
+python doctor.py                                  # local ComfyUI
+python doctor.py --url http://192.168.1.206:8188  # ComfyUI on the GPU box
+```
+
+It checks the Python environment, config, Harry's model, ComfyUI's reachability
+and VRAM, the installed nodes and model files, whether your workflow is API
+format and can actually hold a character's identity, the node mapping, the video
+routes, and the registry — in dependency order, so the first failure is the one
+worth acting on. Also available as **Full preflight** on the Setup tab.
+
+**[SETUP.md](SETUP.md)** walks from a fresh GPU machine to your first real
+keyframe, including the shape the FLUX + IP-Adapter workflow needs to be.
+
 ## The model chain
 
 Three stages. **Stage 1 is a manual handoff; stages 2 and 3 run on the GPU

@@ -219,9 +219,15 @@ production, not just Harry's work.
 | `test_pipeline` | 51 checks, 7 scenarios | 0 failures |
 | `test_remote_gpu` | 40 checks, 6 scenarios | 0 failures |
 | `test_review_fixes` | 32 checks, 10 scenarios | 0 failures |
+| `test_doctor` | 18 checks, 7 machine states | 0 failures |
 | `test_app_smoke` | app builds + wiring | 0 failures |
 
-Run: `python tests\test_review_fixes.py` (each is standalone).
+Run: `python tests\test_doctor.py` (each is standalone).
+
+`tests\fake_comfy.py` is a stand-in ComfyUI with profiles for the half-configured
+states that matter — `complete`, `no_ipadapter`, `no_model`, `no_flux`. An absent
+ComfyUI is easy to detect; the dangerous states are the in-between ones, and
+those are what it exists to reproduce.
 
 ---
 
