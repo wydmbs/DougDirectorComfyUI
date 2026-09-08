@@ -36,17 +36,35 @@ IPADAPTER_NODES = {
         "clip_name": [["CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"]]}}},
 }
 
+# FLUX uses a different adapter entirely. A machine can have the SD/SDXL nodes
+# and still be unable to condition a FLUX render, which is the trap worth
+# reproducing.
+IPADAPTER_FLUX_NODES = {
+    "ApplyIPAdapterFlux": {"input": {"required": {"weight": ["FLOAT"]}}},
+    "IPAdapterFluxLoader": {"input": {"required": {
+        "ipadapter": [["instantx_flux1_dev_ip_adapter_bf16.safetensors"]]}}},
+}
+
 VIDEO_NODES = {
     "VHS_VideoCombine": {"input": {"required": {}}},
     "LTXVImgToVideo": {"input": {"required": {"num_frames": ["INT"]}}},
 }
 
 PROFILES = {
-    # Everything present: the state the doctor should call ready.
-    "complete": {**BASE_NODES, **IPADAPTER_NODES, **VIDEO_NODES},
+    # Everything present, FLUX adapter included: the state to call ready.
+    "complete": {**BASE_NODES, **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES, **VIDEO_NODES},
     # ComfyUI up, IP-Adapter never installed. The most common real gap, and the
     # one that silently ruins continuity if it goes unnoticed.
     "no_ipadapter": BASE_NODES,
+    # The trap found on the real machine: SD/SDXL adapter present, FLUX one
+    # absent. Everything looks installed and FLUX still cannot be conditioned.
+    "sd_only": {**BASE_NODES, **IPADAPTER_NODES, **VIDEO_NODES},
+    # FLUX node installed but its model file never downloaded.
+    "no_flux_adapter_model": {
+        **BASE_NODES, **VIDEO_NODES,
+        "ApplyIPAdapterFlux": IPADAPTER_FLUX_NODES["ApplyIPAdapterFlux"],
+        "IPAdapterFluxLoader": {"input": {"required": {"ipadapter": [[]]}}},
+    },
     # IP-Adapter nodes installed but no model file downloaded.
     "no_model": {
         **BASE_NODES,
@@ -59,7 +77,7 @@ PROFILES = {
         **{k: v for k, v in BASE_NODES.items() if k != "CheckpointLoaderSimple"},
         "CheckpointLoaderSimple": {"input": {"required": {
             "ckpt_name": [["sd_xl_base_1.0.safetensors"]]}}},
-        **IPADAPTER_NODES,
+        **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES,
     },
 }
 

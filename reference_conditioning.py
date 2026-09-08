@@ -26,8 +26,17 @@ MODE_BOTH = "both"
 SUPPORTED_MODES = (MODE_OFF, MODE_IPADAPTER, MODE_IMG2IMG, MODE_BOTH)
 
 # Node classes that accept a reference, most specific first.
-IPADAPTER_CLASSES = ("IPAdapterAdvanced", "IPAdapterApply", "IPAdapter",
-                     "IPAdapterPlus", "IPAdapterFaceID")
+#
+# FLUX and SD/SDXL use entirely different IP-Adapter implementations, and the
+# distinction is easy to miss: a machine can have the SDXL nodes installed and
+# still be unable to condition a FLUX render at all. The FLUX ones are listed
+# first so they win on a machine that has both, which is common.
+IPADAPTER_FLUX_CLASSES = ("ApplyIPAdapterFluxAdvanced", "ApplyIPAdapterFlux",
+                          "IPAdapterFluxAdvanced", "IPAdapterFlux",
+                          "ApplyFluxIPAdapter", "XlabsSampler")
+IPADAPTER_SD_CLASSES = ("IPAdapterAdvanced", "IPAdapterApply", "IPAdapter",
+                        "IPAdapterPlus", "IPAdapterFaceID")
+IPADAPTER_CLASSES = IPADAPTER_FLUX_CLASSES + IPADAPTER_SD_CLASSES
 LOAD_IMAGE_CLASSES = ("LoadImage", "LoadImageFromPath", "ETN_LoadImageBase64")
 LATENT_CLASSES = ("VAEEncode",)
 
@@ -148,10 +157,17 @@ def _apply_ipadapter(workflow: dict, image_path: str, weight: float, upload=None
     adapter_id, adapter = _find(workflow, IPADAPTER_CLASSES)
     if adapter_id is None:
         return ("the workflow has no IP-Adapter node, so the character's identity was not "
-                "locked -- add IPAdapterAdvanced (ComfyUI_IPAdapter_plus) and wire it "
-                "between the model loader and the sampler")
+                "locked -- for FLUX add ApplyIPAdapterFlux (ComfyUI-IPAdapter-Flux), for "
+                "SD/SDXL add IPAdapterAdvanced (ComfyUI_IPAdapter_plus), wired between the "
+                "model loader and the sampler")
 
-    adapter.setdefault("inputs", {})["weight"] = float(weight)
+    # Weight is named differently across the two families; set whichever the
+    # node actually exposes rather than inventing a field it will reject.
+    inputs = adapter.setdefault("inputs", {})
+    for key in ("weight", "ip_adapter_scale", "strength"):
+        if key in inputs or key == "weight":
+            inputs[key] = float(weight)
+            break
 
     try:
         reference = _resolve(image_path, upload)
@@ -222,11 +238,14 @@ def _note_denoise(workflow: dict) -> str:
 
 def inspect_workflow(workflow: dict) -> dict:
     """What this workflow can and can't do, before anything is generated."""
-    adapter_id, _ = _find(workflow, IPADAPTER_CLASSES)
+    flux_id, _ = _find(workflow, IPADAPTER_FLUX_CLASSES)
+    sd_id, _ = _find(workflow, IPADAPTER_SD_CLASSES)
+    adapter_id = flux_id or sd_id
     encode_id, _ = _find(workflow, LATENT_CLASSES)
     loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
     return {
         "has_ipadapter": adapter_id is not None,
+        "ipadapter_family": "flux" if flux_id else ("sd" if sd_id else ""),
         "has_img2img": encode_id is not None,
         "load_image_nodes": len(loaders),
         "can_lock_identity": adapter_id is not None and bool(loaders),

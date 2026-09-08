@@ -25,8 +25,14 @@ OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 MARKS = {OK: "  ok  ", WARN: " warn ", FAIL: " FAIL ", SKIP: " --   "}
 
 # What the keyframe stage needs present in ComfyUI.
-FLUX_NODES = ("IPAdapterAdvanced", "IPAdapterModelLoader", "LoadImage",
-              "CLIPVisionLoader", "VAEEncode")
+#
+# FLUX and SD/SDXL use different IP-Adapter implementations, and having the
+# SD/SDXL ones installed does NOT mean a FLUX render can be conditioned. Both
+# families are checked separately so "IP-Adapter is installed" can never be
+# reported when the wrong one is present.
+CORE_NODES = ("LoadImage", "VAEEncode")
+IPADAPTER_FLUX_NODES = ("ApplyIPAdapterFlux", "IPAdapterFluxLoader")
+IPADAPTER_SD_NODES = ("IPAdapterAdvanced", "IPAdapterModelLoader")
 VIDEO_OUTPUT_NODES = ("VHS_VideoCombine", "SaveAnimatedWEBP", "SaveWEBM",
                       "SaveVideo", "SaveAnimatedPNG")
 
@@ -196,17 +202,34 @@ def check_comfy(report, cfg):
                    "ComfyUI answered but /object_info failed. Check its console for errors.")
         return client, set()
 
-    missing = [n for n in FLUX_NODES if n not in classes]
-    if missing:
-        report.add(section, FAIL, "Nodes needed for keyframe staging are missing",
-                   ", ".join(missing),
-                   "Install ComfyUI_IPAdapter_plus via ComfyUI-Manager, or:\n"
+    missing_core = [n for n in CORE_NODES if n not in classes]
+    if missing_core:
+        report.add(section, FAIL, "Core nodes are missing", ", ".join(missing_core),
+                   "This ComfyUI looks incomplete. Reinstall or repair it.")
+
+    has_flux = all(n in classes for n in IPADAPTER_FLUX_NODES)
+    has_sd = all(n in classes for n in IPADAPTER_SD_NODES)
+
+    if has_flux:
+        report.add(section, OK, "FLUX IP-Adapter nodes are installed (ApplyIPAdapterFlux)")
+    elif has_sd:
+        report.add(section, FAIL,
+                   "Only the SD/SDXL IP-Adapter is installed -- FLUX needs a different one",
+                   "Found IPAdapterAdvanced, but not ApplyIPAdapterFlux.",
+                   "The SD/SDXL adapter cannot condition a FLUX render. Install:\n"
                    "  cd ComfyUI/custom_nodes\n"
-                   "  git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus\n"
-                   "then restart ComfyUI.\n"
-                   "Without IP-Adapter, characters will drift between every shot.")
+                   "  git clone https://github.com/Shakker-Labs/ComfyUI-IPAdapter-Flux\n"
+                   "and put instantx_flux1_dev_ip_adapter_bf16.safetensors in\n"
+                   "ComfyUI/models/ipadapter-flux, then restart ComfyUI.\n"
+                   "This is easy to miss: a workflow can look correct and still not hold a face.")
     else:
-        report.add(section, OK, "IP-Adapter nodes are installed")
+        report.add(section, FAIL, "No IP-Adapter nodes are installed at all", "",
+                   "For FLUX:\n"
+                   "  git clone https://github.com/Shakker-Labs/ComfyUI-IPAdapter-Flux\n"
+                   "For SD/SDXL:\n"
+                   "  git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus\n"
+                   "into ComfyUI/custom_nodes, then restart ComfyUI.\n"
+                   "Without one, characters drift between every single shot.")
 
     if not any(n in classes for n in VIDEO_OUTPUT_NODES):
         report.add(section, WARN, "No video output node found",
@@ -251,14 +274,24 @@ def check_models(report, client, classes):
         report.add(section, FAIL, "No checkpoints installed at all", "",
                    "Put FLUX.1 Dev FP8 in ComfyUI/models/checkpoints and restart ComfyUI.")
 
-    adapters = options("IPAdapterModelLoader", "ipadapter_file")
-    if adapters:
-        report.add(section, OK, f"IP-Adapter model found: {adapters[0]}")
+    flux_adapters = options("IPAdapterFluxLoader", "ipadapter")
+    sd_adapters = options("IPAdapterModelLoader", "ipadapter_file")
+    if flux_adapters:
+        report.add(section, OK, f"FLUX IP-Adapter model found: {flux_adapters[0]}")
+    elif "IPAdapterFluxLoader" in classes:
+        report.add(section, FAIL,
+                   "The FLUX IP-Adapter node is installed but has no model file", "",
+                   "Download instantx_flux1_dev_ip_adapter_bf16.safetensors into\n"
+                   "ComfyUI/models/ipadapter-flux. Without it the node loads and still\n"
+                   "cannot hold a character's face.")
+    elif sd_adapters:
+        report.add(section, WARN, f"Only an SD/SDXL adapter model is present: {sd_adapters[0]}",
+                   "", "Fine for SD/SDXL work; FLUX needs its own adapter model.")
     elif "IPAdapterModelLoader" in classes:
-        report.add(section, FAIL, "IP-Adapter nodes are installed but no model file is",
-                   "",
-                   "Download an IP-Adapter Plus model into ComfyUI/models/ipadapter.\n"
-                   "Without it the node loads but cannot hold a character's face.")
+        report.add(section, WARN,
+                   "The SD/SDXL IP-Adapter node is installed but has no model file", "",
+                   "Put an IP-Adapter model in ComfyUI/models/ipadapter, or install the\n"
+                   "FLUX adapter instead if this machine is for FLUX work.")
 
     vision = options("CLIPVisionLoader", "clip_name")
     if vision:
@@ -316,14 +349,22 @@ def check_workflow(report, cfg, classes):
     from reference_conditioning import inspect_workflow
     found = inspect_workflow(workflow)
     if found["can_lock_identity"]:
-        report.add(section, OK, "It can lock a character's identity (IP-Adapter + LoadImage)")
+        family = found.get("ipadapter_family") or "?"
+        report.add(section, OK,
+                   f"It can lock a character's identity ({family.upper()} IP-Adapter + LoadImage)")
+        if family == "sd" and classes and "ApplyIPAdapterFlux" in classes:
+            report.add(section, WARN,
+                       "The workflow uses the SD/SDXL adapter, but a FLUX one is available",
+                       "",
+                       "If this workflow drives FLUX, swap to ApplyIPAdapterFlux --\n"
+                       "the SD/SDXL adapter cannot condition a FLUX model.")
     else:
         report.add(section, FAIL, "It cannot lock a character's identity",
                    f"IP-Adapter node: {found['has_ipadapter']}, "
                    f"LoadImage nodes: {found['load_image_nodes']}",
-                   "Add an IPAdapterAdvanced node fed by a LoadImage, wired between\n"
-                   "the model loader and the sampler. Without it, every panel of a\n"
-                   "character sheet will be a different pig.")
+                   "Add an ApplyIPAdapterFlux node (for FLUX) fed by a LoadImage, wired\n"
+                   "between the model loader and the sampler. Without it, every panel of\n"
+                   "a character sheet will be a different pig.")
 
     if found["can_anchor_scene"]:
         report.add(section, OK, "It can anchor a scene (VAEEncode present)")

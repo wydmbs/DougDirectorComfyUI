@@ -56,6 +56,7 @@ def registry_lock(path: str, timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float
     rather than proceeding alongside them.
     """
     lock_file = _lock_path(path)
+    reclaim_file = lock_file + ".reclaim"
     os.makedirs(os.path.dirname(lock_file) or ".", exist_ok=True)
     started = time.time()
     token = f"{os.getpid()}:{uuid.uuid4().hex}"
@@ -66,23 +67,43 @@ def registry_lock(path: str, timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float
             os.write(handle, token.encode("utf-8"))
             os.close(handle)
         except FileExistsError:
-            if time.time() - started >= timeout_s:
-                if _reclaimable(lock_file, timeout_s):
+            if time.time() - started >= timeout_s and _reclaimable(lock_file, timeout_s):
+                # Reclaiming has to be exclusive too. Checking "is this stale?"
+                # and then deleting is two steps, and two waiters can both pass
+                # the check before either deletes -- the second then removes the
+                # *fresh* lock the first just took, and both proceed. So the
+                # reclaim itself is serialised behind its own mutex, and the
+                # staleness is re-checked once we hold it, because by then the
+                # lock may belong to a live process that just won it.
+                try:
+                    reclaim_handle = os.open(
+                        reclaim_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    time.sleep(poll_s)
+                    continue
+                try:
+                    if _reclaimable(lock_file, timeout_s):
+                        try:
+                            os.unlink(lock_file)
+                        except OSError:
+                            pass
+                    started = time.time()  # fresh budget for the retry
+                finally:
                     try:
-                        os.unlink(lock_file)
+                        os.close(reclaim_handle)
+                        os.unlink(reclaim_file)
                     except OSError:
                         pass
-                    started = time.time()  # give the retry a fresh budget
-                    continue
+                continue
+
+            if time.time() - started >= timeout_s:
                 raise RegistryLockTimeout(
                     f"The registry stayed locked by another writer for {timeout_s:.0f}s: {path}"
                 )
             time.sleep(poll_s)
             continue
 
-        # Confirm we still own what we just created. If a racing reclaimer
-        # deleted our lock and wrote its own, back off instead of both of us
-        # believing we hold it -- that is the corruption this exists to stop.
+        # Defence in depth: confirm we still own what we just created.
         if _owner_of(lock_file) != token:
             time.sleep(poll_s)
             continue

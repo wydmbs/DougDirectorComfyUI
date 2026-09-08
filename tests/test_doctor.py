@@ -44,7 +44,7 @@ def wait_for_port(timeout=15):
     return False
 
 
-def full_workflow(path, denoise=0.6, with_ipadapter=True):
+def full_workflow(path, denoise=0.6, with_ipadapter=True, flux_adapter=True):
     workflow = {
         "1": {"class_type": "CheckpointLoaderSimple",
               "inputs": {"ckpt_name": "flux1-dev-fp8.safetensors"}},
@@ -58,11 +58,18 @@ def full_workflow(path, denoise=0.6, with_ipadapter=True):
         "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0]}},
     }
     if with_ipadapter:
-        workflow["3"] = {"class_type": "IPAdapterModelLoader",
-                         "inputs": {"ipadapter_file": "ip-adapter-plus_sd15.safetensors"}}
-        workflow["5"] = {"class_type": "IPAdapterAdvanced",
-                         "inputs": {"model": ["1", 0], "ipadapter": ["3", 0],
-                                    "image": ["2", 0], "weight": 0.8}}
+        if flux_adapter:
+            workflow["3"] = {"class_type": "IPAdapterFluxLoader",
+                             "inputs": {"ipadapter": "instantx_flux1_dev_ip_adapter_bf16.safetensors"}}
+            workflow["5"] = {"class_type": "ApplyIPAdapterFlux",
+                             "inputs": {"model": ["1", 0], "ipadapter_flux": ["3", 0],
+                                        "image": ["2", 0], "weight": 0.8}}
+        else:
+            workflow["3"] = {"class_type": "IPAdapterModelLoader",
+                             "inputs": {"ipadapter_file": "ip-adapter-plus_sd15.safetensors"}}
+            workflow["5"] = {"class_type": "IPAdapterAdvanced",
+                             "inputs": {"model": ["1", 0], "ipadapter": ["3", 0],
+                                        "image": ["2", 0], "weight": 0.8}}
         workflow["10"]["inputs"]["model"] = ["5", 0]
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(workflow, handle, indent=2)
@@ -124,8 +131,10 @@ def main():
     full_workflow(os.path.join(workdir, "wf.json"), with_ipadapter=False)
     _patch_workflow_path(workdir, "wf.json")
     output = with_fake("no_ipadapter", lambda: run_doctor(workdir))
-    check("IPAdapterAdvanced" in output, "the missing IP-Adapter node is named")
-    check("cubiq/ComfyUI_IPAdapter_plus" in output, "the fix gives the actual repo")
+    check("No IP-Adapter nodes are installed at all" in output,
+          "a total absence of IP-Adapter is reported")
+    check("ComfyUI-IPAdapter-Flux" in output and "ComfyUI_IPAdapter_plus" in output,
+          "the fix gives both repos, FLUX first")
     check("drift" in output.lower(), "it says why this matters, not just that it's missing")
     check("cannot lock a character's identity" in output,
           "the workflow is also reported as unable to hold a face")
@@ -133,11 +142,31 @@ def main():
 
     print("\n[3] Nodes installed but no IP-Adapter model file")
     workdir = setup_workdir()
-    full_workflow(os.path.join(workdir, "wf.json"))
+    full_workflow(os.path.join(workdir, "wf.json"), flux_adapter=False)
     _patch_workflow_path(workdir, "wf.json")
     output = with_fake("no_model", lambda: run_doctor(workdir))
     check("no model file" in output.lower(), "the missing model file is called out")
-    check("models/ipadapter" in output, "the fix says where to put it")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[3b] SD/SDXL adapter present but FLUX one missing -- the real trap")
+    workdir = setup_workdir()
+    full_workflow(os.path.join(workdir, "wf.json"), flux_adapter=False)
+    _patch_workflow_path(workdir, "wf.json")
+    output = with_fake("sd_only", lambda: run_doctor(workdir))
+    check("FLUX needs a different one" in output,
+          "having only the SD/SDXL adapter is reported as blocking, not fine")
+    check("ComfyUI-IPAdapter-Flux" in output, "the fix names the FLUX adapter repo")
+    check("ipadapter-flux" in output, "the fix names the model folder")
+    check("easy to miss" in output, "it warns this looks correct while not working")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[3c] FLUX adapter node present but its model never downloaded")
+    workdir = setup_workdir()
+    full_workflow(os.path.join(workdir, "wf.json"))
+    _patch_workflow_path(workdir, "wf.json")
+    output = with_fake("no_flux_adapter_model", lambda: run_doctor(workdir))
+    check("no model file" in output.lower(), "the missing FLUX adapter model is caught")
+    check("instantx_flux1_dev_ip_adapter" in output, "the fix names the exact file")
     shutil.rmtree(workdir, ignore_errors=True)
 
     print("\n[4] No FLUX checkpoint")
