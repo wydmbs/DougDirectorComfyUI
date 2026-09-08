@@ -45,6 +45,16 @@ new piece against these before adding it:
   a live ComfyUI + Flux 2 workflow, and the composite sheet is not yet fed
   back in as a reference image for new generations (still depends on the
   Flux 2 vs. Nano Banana Pro call).
-- **Module 2 — not started.** Candidates: video generation (MiniMax H3
+- **Module 2 — Harry the assistant director.** Harry no longer only *reads* the
+  source; he can execute the call sheet. `harry_agent/` holds the loop, the
+  tool registry, the permission policy, the shell guard and the audit log;
+  `director_engine.py` is the headless core both the Build tab and Harry's
+  tools call, so the two can't drift apart. Per rule 1 he writes to the same
+  Assets/Panels registry, tagging his notes `[HARRY]` — no side database. Per
+  rule 3 he runs on a worker thread inside this shell and surfaces through the
+  Harry rail and the "On set" panel in Build, rather than becoming a second app
+  to launch. **His memory is the registry, not a transcript**, which is what
+  makes a run resumable after a crash. See BUILD_LIST.md.
+- **Module 3 — not started.** Candidates: video generation (MiniMax H3
   Ref2VA/FL2VA) or a QA/conformance reviewer. Whichever starts first should
   extend the same registry rather than create its own.

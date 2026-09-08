@@ -129,15 +129,47 @@ once you've hand-built a workflow in ComfyUI's own UI, exported it via
 ### Not yet built (intentional scope cuts, not oversights)
 
 - Auto-feeding a locked `BACKDROP:` plate back in as a reference image for the
-  next generation — depends on finalizing which image model (Flux 2 vs. a
-  callable API model) since the reference-image mechanism differs between
-  them.
+  next generation — the *seam* now exists (`reference_conditioning.py`), so this
+  is a config choice rather than a rewrite, but it stays `off` until the image
+  model is settled (Flux 2 vs. a callable API model) since the reference
+  mechanism differs between them.
+- A real critic for `critique_variants`. The tool and its call path exist; with
+  no critic configured it tells Harry to judge on the evidence he has. A proper
+  one needs a vision model scoring variants against the locked concept, which
+  depends on the same image-model decision.
 - Runtime Check-style automatic duration reconciliation — needs
   word-level audio-narration timing data, which doesn't exist yet for the
   rebaselined story.
 - Anything video-side (MiniMax H3 Ref2VA/FL2VA). This module is scoped to
   the image-building loop only; see `SUITE.md` for how a video module should
   plug into the same registry.
+
+## Harry the assistant director
+
+Harry reads the source *and* executes the call sheet. He generates, judges the
+dailies, prints the takes that earn it, assembles sheets, and can check a real
+ComfyUI install against a workflow.
+
+He lives in context rather than in a tab of his own: a **rail** on Build and
+Registry shows where the production stands, and **"On set with Harry"** inside
+Build is where you commission and watch a run.
+
+```powershell
+python tests\test_agent_loop.py      # end-to-end, no API key or GPU needed
+python tests\test_shell_safety.py    # the guard on anything touching your PC
+```
+
+How much rope he gets is yours to set per run:
+
+| Posture | Harry can |
+|---|---|
+| Attended | nothing that changes the project without asking |
+| Supervised *(default)* | generate freely; asks before printing a take |
+| Unattended | work the plan alone |
+
+Installing custom nodes or downloading models **always** asks, under every
+posture, and every proposed command passes the shell guard first. See
+`BUILD_LIST.md` for the design and what remains.
 
 ## License
 
