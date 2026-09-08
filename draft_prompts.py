@@ -133,10 +133,59 @@ def scene_concept(subject: str, description: str = "", era: str = "",
     )
 
 
+ADAPTER_REFERENCE_TEMPLATE = """Single character reference image for an animated film.
+
+SUBJECT: {subject}
+
+{details}
+LAYOUT: ONE character, ONE view, alone in the frame. A three-quarter view from
+the front, turned slightly to the character's left, framed from mid-thigh up so
+the head and costume both read clearly. The character fills most of the frame
+and is centred. Absolutely not a turnaround sheet, not a grid, not multiple
+panels, not several copies of the character -- a single figure in a single
+photograph-like frame.
+
+STYLE: {style}
+LIGHTING: Flat, even studio lighting. No dramatic shadows, no rim light, no
+coloured gels. This image defines who the character is, not how a scene looks,
+so anything atmospheric baked in here will follow the character into every
+later shot.
+BACKGROUND: Plain, solid, uniform light grey. Completely empty. No floor line,
+no shadow on the ground, no vignette, no gradient.
+
+DO NOT INCLUDE: text, labels, watermarks, signatures, borders, frames, panels,
+multiple views, multiple characters, background scenery, props not listed
+above, dramatic lighting, or motion blur."""
+
+
+def adapter_reference(subject: str, description: str = "", era: str = "",
+                      continuity: str = "", palette: str = "",
+                      style: str = "") -> str:
+    """The image FLUX's IP-Adapter should actually be conditioned on.
+
+    A four-view turnaround is the right artifact for a human to approve, and it
+    is what Minimax REF2VA wants, since that takes several images and can use
+    the profiles. The FLUX IP-Adapter is not that: it embeds one whole image
+    through SigLIP and conditions on the result. Hand it a turnaround and the
+    thing it encodes is a picture of four roosters arranged on grey -- so the
+    layout leaks, and shots come back subtly gridded or with a stray second
+    character at the edge.
+
+    So the sheet and the adapter reference are different artifacts with
+    different jobs, and the sheet is not a substitute for this one.
+    """
+    return ADAPTER_REFERENCE_TEMPLATE.format(
+        subject=subject,
+        details=_details(description, era, continuity, palette),
+        style=style or DEFAULT_STYLE,
+    )
+
+
 BUILDERS = {
     "CHARACTER": character_sheet,
     "PROP": prop_sheet,
     "BACKDROP": scene_concept,
+    "REFERENCE": adapter_reference,
 }
 
 
