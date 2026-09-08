@@ -34,6 +34,8 @@ import storyboard_store as store
 import sheet_composer as composer
 import harry_advisor as harry
 import project_manager as projects
+import director_engine as engine
+import harry_ui
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 # ---------------------------------------------------------------------------
@@ -832,6 +834,115 @@ def lock_click_ui(entry_id, entry_type, build_stage, panel_key, beat, descriptio
     return html
 
 
+# ---------------------------------------------------------------------------
+# Harry on set — the assistant director working inside the pipeline.
+#
+# He is deliberately not a separate tab. The tab strip already is the
+# production process, so Harry rides along it: a rail that shows where the
+# production stands, and this panel inside Build where work is commissioned
+# and watched.
+# ---------------------------------------------------------------------------
+
+HARRY_RUNNER = None
+
+
+def _overview_safe():
+    try:
+        return engine.project_overview(CFG)
+    except Exception:
+        return {"entries": 0, "by_type": {}, "sheets": [], "sheets_complete": 0,
+                "total_panels": 0, "locked_panels": 0, "panel_progress": 0.0,
+                "beats": 0, "characters": 0, "mock_mode": CFG.mock_mode}
+
+
+def harry_rail_html():
+    """The persistent strip. Reads the same overview Harry's tools read, so the
+    rail and the assistant can never disagree about the state of the build."""
+    overview = _overview_safe()
+    snapshot = HARRY_RUNNER.snapshot() if HARRY_RUNNER else {}
+    nxt = engine.next_unfinished_panel(CFG)
+    return harry_ui.rail(
+        overview,
+        mood=harry_ui.mood_for(snapshot),
+        line=harry_ui.status_line(snapshot, overview),
+        next_action=f"{nxt['entry_id']} {nxt['panel_key']}" if nxt else "",
+    )
+
+
+def harry_agent_start(goal, posture, max_steps, provider_name):
+    global HARRY_RUNNER
+    from harry_agent import AgentRunner, build_registry
+    from harry_agent.providers import build_provider
+
+    if not (goal or "").strip():
+        return (harry_rail_html(), harry_ui.feed([]),
+                reward_card("⚠️ Tell Harry what you want done first."), "")
+
+    if HARRY_RUNNER and HARRY_RUNNER.running:
+        return (harry_rail_html(), harry_ui.feed(HARRY_RUNNER.snapshot()["events"]),
+                reward_card("⚠️ Harry is already working. Let him finish, or stop him."), "")
+
+    try:
+        provider = build_provider(provider_name or CFG.harry_provider, CFG)
+    except Exception as error:
+        return (harry_rail_html(), harry_ui.feed([]),
+                reward_card(f"⚠️ {error}"), "")
+
+    registry = build_registry(CFG)
+    HARRY_RUNNER = AgentRunner(CFG, provider, registry, posture=posture,
+                               audit_path="harry_agent_audit.sqlite3",
+                               max_steps=int(max_steps or CFG.agent.max_steps))
+    context = (f"Project: {ACTIVE_PROJECT_ID}. Registry: {CFG.storyboard_path}. "
+               f"Mock mode is {'on' if CFG.mock_mode else 'off'}.")
+    try:
+        HARRY_RUNNER.start(goal, context)
+    except RuntimeError as error:
+        return harry_rail_html(), harry_ui.feed([]), reward_card(f"⚠️ {error}"), ""
+    return (harry_rail_html(), harry_ui.feed(HARRY_RUNNER.snapshot()["events"]),
+            reward_card("🎬 Action — Harry is on set."), "")
+
+
+def harry_agent_poll():
+    """Called on a timer while a run is live, to keep the feed moving."""
+    if not HARRY_RUNNER:
+        return harry_rail_html(), harry_ui.feed([]), "", gr.update(visible=False)
+    snapshot = HARRY_RUNNER.snapshot()
+    consent = snapshot.get("awaiting_consent")
+    return (harry_rail_html(),
+            harry_ui.feed(snapshot["events"]),
+            harry_ui.consent_card(consent),
+            gr.update(visible=bool(consent)))
+
+
+def harry_agent_stop():
+    if HARRY_RUNNER:
+        HARRY_RUNNER.cancel()
+    return harry_rail_html(), reward_card("🛑 Harry stopped. Nothing half-written was left behind.")
+
+
+def harry_agent_answer(allow_session):
+    from harry_agent import Decision
+    if not HARRY_RUNNER:
+        return harry_rail_html(), "", gr.update(visible=False)
+    HARRY_RUNNER.answer(Decision.ALLOW_SESSION if allow_session else Decision.ALLOW_ONCE)
+    return harry_rail_html(), "", gr.update(visible=False)
+
+
+def harry_agent_deny():
+    from harry_agent import Decision
+    if HARRY_RUNNER:
+        HARRY_RUNNER.answer(Decision.DENY)
+    return harry_rail_html(), "", gr.update(visible=False)
+
+
+HARRY_GOALS = [
+    "Finish the next unfinished panel on any sheet",
+    "Complete every panel for one character sheet",
+    "Check my ComfyUI setup against the current workflow",
+    "Review what's locked and tell me what's missing",
+]
+
+
 def import_beats_ui(beats_file):
     if beats_file is None:
         return "⚠️ Choose a beats JSON file first.", beats_table_refresh()
@@ -1196,7 +1307,7 @@ roll camera → review dailies → print loop.
 ### The tabs, in the order you'll usually use them
 
 1. **Setup** — connect ComfyUI and choose Harry's provider. Claude is the
-   default; Azure OpenAI can reuse your local OpenScout configuration.
+   default; Azure OpenAI is configured here too, in its own fields.
 2. **Harry the Advisor** — attach a text document, paste text, or attach audio
    and transcribe it locally. Review, edit, and approve Harry's call sheet.
 3. **Build** — choose the artifact type, load an approved draft if useful,
@@ -1346,7 +1457,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 )
                 gr.Markdown("#### Harry the Advisor provider")
                 harry_provider = gr.Dropdown(label="Advisor model provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider,
-                                             info="Claude is the default. Azure OpenAI reuses the local OpenScout Azure configuration and its environment key.")
+                                             info="Claude is the default. Azure OpenAI uses the endpoint and deployment set below.")
                 harry_provider_note = gr.Markdown(harry.provider_status(CFG.harry_provider))
                 harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
 
@@ -1442,6 +1553,44 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 "Every scene starts here. Work the slate top to bottom — nothing "
                 "makes it into the final reel until you **print the take**."
             )
+            build_rail = gr.HTML(harry_rail_html())
+
+            with gr.Accordion("🎬 On set with Harry — let him work the slate", open=False):
+                gr.Markdown(
+                    "Harry can run the slate himself: generate, judge the dailies, and print "
+                    "the takes that earn it. He reads the registry as he goes, so you can stop "
+                    "him at any point and nothing is left half-written."
+                )
+                with gr.Row():
+                    harry_goal = gr.Dropdown(
+                        label="What should Harry do?", choices=HARRY_GOALS,
+                        value=HARRY_GOALS[0], allow_custom_value=True, scale=3,
+                        info="Pick one, or type your own.")
+                    harry_posture = gr.Radio(
+                        label="How much rope?",
+                        choices=[("Check with me each time", "attended"),
+                                 ("Generate freely, ask before printing", "supervised"),
+                                 ("Work alone", "unattended")],
+                        value="supervised", scale=2)
+                with gr.Row():
+                    harry_max_steps = gr.Slider(label="Step budget", minimum=5, maximum=120,
+                                                value=40, step=5, scale=2,
+                                                info="A hard ceiling on how long he can work.")
+                    harry_agent_provider = gr.Dropdown(
+                        label="Model", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"],
+                        value=CFG.harry_provider, scale=2)
+                with gr.Row():
+                    harry_action_btn = gr.Button("🎬 Action!", variant="primary", scale=2)
+                    harry_stop_btn = gr.Button("🛑 Cut", scale=1)
+                harry_agent_status = gr.HTML("")
+                harry_consent = gr.HTML("")
+                with gr.Row(visible=False) as harry_consent_row:
+                    harry_allow_once_btn = gr.Button("Allow once", variant="primary")
+                    harry_allow_session_btn = gr.Button("Allow for this session")
+                    harry_deny_btn = gr.Button("No")
+                harry_feed = gr.HTML(harry_ui.feed([]))
+                harry_refresh_btn = gr.Button("↻ Refresh Harry's progress", size="sm")
+
             build_context_banner = gr.HTML(build_context("CHARACTER"))
             with gr.Group(elem_classes=["step-card", "step-1"]):
                 build_preset = gr.Dropdown(label="Start from a Harry-approved draft (optional)", choices=harry.preset_choices(), value=None,
@@ -1622,6 +1771,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 "underneath the old one — it won't duplicate. The Chained from "
                 "column records continuity with an earlier locked shot or asset."
             )
+            registry_rail = gr.HTML(harry_rail_html())
             refresh_btn = gr.Button("Refresh")
             registry_empty = gr.HTML(visible=False)
             registry_table = gr.Dataframe(
@@ -1675,4 +1825,44 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
 
 if __name__ == "__main__":
-    demo.launch(favicon_path=FAVICON_PATH if os.path.exists(FAVICON_PATH) else None)
+        # ----------------------------------------------------------------- Harry
+    # Wired here, at the end, so every component above already exists.
+    harry_action_btn.click(
+        harry_agent_start,
+        inputs=[harry_goal, harry_posture, harry_max_steps, harry_agent_provider],
+        outputs=[build_rail, harry_feed, harry_agent_status, harry_consent],
+    )
+    harry_stop_btn.click(harry_agent_stop, outputs=[build_rail, harry_agent_status])
+    harry_refresh_btn.click(
+        harry_agent_poll,
+        outputs=[build_rail, harry_feed, harry_consent, harry_consent_row],
+    )
+    harry_allow_once_btn.click(
+        lambda: harry_agent_answer(False),
+        outputs=[build_rail, harry_consent, harry_consent_row],
+    ).then(harry_agent_poll, outputs=[build_rail, harry_feed, harry_consent, harry_consent_row])
+    harry_allow_session_btn.click(
+        lambda: harry_agent_answer(True),
+        outputs=[build_rail, harry_consent, harry_consent_row],
+    ).then(harry_agent_poll, outputs=[build_rail, harry_feed, harry_consent, harry_consent_row])
+    harry_deny_btn.click(
+        harry_agent_deny,
+        outputs=[build_rail, harry_consent, harry_consent_row],
+    ).then(harry_agent_poll, outputs=[build_rail, harry_feed, harry_consent, harry_consent_row])
+
+    # A live run refreshes itself; when nothing is running this is a cheap
+    # no-op read of the registry, so it doubles as keeping the rail current.
+    harry_timer = getattr(gr, "Timer", None)
+    if harry_timer is not None:
+        _tick = harry_timer(2.0)
+        _tick.tick(harry_agent_poll,
+                   outputs=[build_rail, harry_feed, harry_consent, harry_consent_row])
+
+    # Locking by hand should move the rail too -- the rail reflects the
+    # production, not just Harry's own work.
+    lock_btn.click(harry_rail_html, outputs=build_rail)
+    demo.load(harry_rail_html, outputs=build_rail)
+    demo.load(harry_rail_html, outputs=registry_rail)
+    refresh_btn.click(harry_rail_html, outputs=registry_rail)
+
+demo.launch(favicon_path=FAVICON_PATH if os.path.exists(FAVICON_PATH) else None)
