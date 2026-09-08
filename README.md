@@ -146,41 +146,55 @@ once you've hand-built a workflow in ComfyUI's own UI, exported it via
 
 ## The model chain
 
-Three stages, each with a model chosen for a reason:
+Three stages. **Stage 1 is a manual handoff; stages 2 and 3 run on the GPU
+machine through ComfyUI.**
 
 ```
-DRAFT              KEYFRAME                    CLIP
-ChatGPT/DALL-E 3   FLUX.1 Dev FP8 (local)      Minimax H3   performance, dialogue
-concept sheets  →  IP-Adapter locks the    →   LTX-2.5      camera moves, cuts
-turnarounds        face; img2img anchors       Runway Gen-4 physics, destruction
-scene concepts     the scene
+DRAFT (manual)          KEYFRAME + CLIP (GPU machine, via ComfyUI)
+ChatGPT / DALL-E 3      FLUX.1 Dev      keyframes, IP-Adapter locks the face
+  app writes prompt  →  Minimax H3      dialogue, REF2VA
+  you paste, save    →  LTX-2.5         camera moves, cuts
+  attach the image   →  Runway Gen-4    physics, destruction
 ```
 
-**Drafting** happens in ChatGPT — prompt for a *"character concept sheet,
-multiple angles, front, side, back profile, flat studio lighting"* on a neutral
-background, and wide establishing shots for environments. Save the image and
-attach it with `attach_draft`; everything downstream anchors to it.
+### Stage 1 — drafting stays manual, on purpose
 
-**Keyframe staging** runs FLUX.1 Dev locally. The turnaround sheet drives
-IP-Adapter-Plus so the face survives into a new composition, and the scene
-concept anchors the background through img2img. Your workflow needs an
-`IPAdapterAdvanced` node fed by a `LoadImage` — run `check_reference_setup` and
-Harry will tell you whether yours can hold a character's identity.
+ChatGPT has no API here and no seed control, so pretending to automate it would
+add a dependency and a failure mode for nothing. Instead, on **Harry's tab →
+"Draft it in ChatGPT"**: describe the asset, Harry writes a precise prompt, you
+paste it into ChatGPT, save the image you like, and attach it back. That image
+becomes the draft everything downstream is anchored to.
 
-**Clips** route by what the shot actually needs:
+The prompts are opinionated about the things that matter later — plain grey
+background, flat studio lighting, all four angles on one sheet — because
+IP-Adapter reads a busy background as part of the character, and Minimax REF2VA
+needs the profiles.
+
+### Stages 2 and 3 — everything renders on the GPU machine
+
+Point **Setup → The GPU machine** at the ComfyUI on your 4090. LTX-2.5 is local
+weights; Minimax H3 and Runway Gen-4 come in through ComfyUI's API nodes. So all
+three are just workflows: one connection to configure, and the vendor
+credentials live in ComfyUI rather than in this app's config.
+
+Each route needs its own workflow, exported from ComfyUI with **Save (API
+Format)**. `gpu_readiness` tells you which are ready and what's missing.
+
+**Remote works exactly like local.** Images are uploaded to ComfyUI and
+referenced by the name it returns, so the app can run on a laptop while
+rendering happens on the GPU box. (A local file path handed to a remote ComfyUI
+loads nothing and still reports success, which is the quiet failure this
+avoids.)
 
 | Shot | Model | Where | Why |
 |---|---|---|---|
-| Dialogue, expression, head turns | Minimax H3 | cloud, ≤15s | REF2VA takes the keyframe **and** the turnaround, so a turning head doesn't melt |
+| Dialogue, expression, head turns | Minimax H3 | cloud via ComfyUI, ≤15s | REF2VA takes the keyframe **and** the turnaround, so a turning head doesn't melt |
 | Camera pans, tracking, cuts | LTX-2.5 | local, free | Fast, native multi-shot sequencing — the workhorse |
-| Explosions, water, shattering, cloth | Runway Gen-4 Turbo | cloud, ≤5s | Physics the open-weight models still fumble |
+| Explosions, water, shattering, cloth | Runway Gen-4 Turbo | cloud via ComfyUI, ≤5s | Physics the open-weight models still fumble |
 
 Routing is automatic but advisory: `route_shot` gives a recommendation *and its
 reasoning*, and physics beats performance beats camera when a shot has more than
 one. Override it whenever you disagree.
-
-Set the video endpoints and keys in Setup. Keys are read from the environment
-(`MINIMAX_API_KEY`, `RUNWAY_API_KEY`) and never stored in the config file.
 
 ## Harry the assistant director
 

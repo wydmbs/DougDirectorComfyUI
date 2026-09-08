@@ -21,24 +21,41 @@ Status keys: **[done]** shipped in this branch · **[next]** ready to start ·
 ## The model chain — baked in
 
 ```
-DRAFT              KEYFRAME                    CLIP
-ChatGPT/DALL-E 3   FLUX.1 Dev FP8 (local)      Minimax H3   performance / dialogue
-concept sheets  →  IP-Adapter locks the    →   LTX-2.5      camera moves, cuts
-turnarounds        face; img2img anchors       Runway Gen-4 physics, destruction
-scene concepts     the scene
+DRAFT (manual)          KEYFRAME + CLIP (GPU machine, all via ComfyUI)
+ChatGPT / DALL-E 3      FLUX.1 Dev      IP-Adapter locks the face
+  app writes prompt  →  Minimax H3      dialogue / performance
+  you paste + save   →  LTX-2.5         camera moves, cuts
+  attach the image   →  Runway Gen-4    physics, destruction
 ```
 
 **D1 resolved: FLUX.1 Dev + IP-Adapter, not Nano Banana Pro.** Reference
-conditioning now defaults to `ipadapter` because without it every character
-quietly drifts between shots.
+conditioning defaults to `ipadapter` because without it every character quietly
+drifts between shots.
+
+**Drafting is a manual handoff.** ChatGPT has no API here and no seed control,
+so `draft_prompts.py` writes an opinionated prompt (plain grey background, flat
+studio lighting, four angles on one sheet) and the director carries the image
+back. Automating it would add a dependency and a failure mode for nothing.
+
+**Everything after the draft runs on the GPU machine, through ComfyUI.** LTX-2.5
+is local weights; Minimax H3 and Runway Gen-4 arrive through ComfyUI's API
+nodes. So all three are workflows rather than three REST clients: one connection
+to configure, credentials living in ComfyUI where they belong, and the render
+happening where the GPU is. Each route needs its own API-format export.
 
 | Stage | Model | Where | Cost | Notes |
 |---|---|---|---|---|
-| Draft | ChatGPT / DALL-E 3 | manual | subscription | Attached via `attach_draft`; no API or seed control |
-| Keyframe | FLUX.1 Dev FP8 | local | free, ~12–16GB | Needs `IPAdapterAdvanced` + `LoadImage` in the workflow |
-| Clip A | Minimax H3 REF2VA | cloud | credits, ≤15s | Takes keyframe **and** turnaround — why a head turn holds |
-| Clip B | LTX-2.5 | local | free, ~14GB | The workhorse: multi-shot cuts, tracking |
-| Clip C | Runway Gen-4 Turbo | cloud | credits, ≤5s | Only for physics local models fumble |
+| Draft | ChatGPT / DALL-E 3 | manual | subscription | Prompt out, image back via `attach_draft` |
+| Keyframe | FLUX.1 Dev FP8 | GPU box | free, ~12–16GB | Needs `IPAdapterAdvanced` + `LoadImage` |
+| Clip A | Minimax H3 REF2VA | GPU box → cloud | credits, ≤15s | Takes keyframe **and** turnaround |
+| Clip B | LTX-2.5 | GPU box | free, ~14GB | The workhorse |
+| Clip C | Runway Gen-4 Turbo | GPU box → cloud | credits, ≤5s | Physics only |
+
+**Remote is the default assumption.** Images are uploaded to ComfyUI and
+referenced by the returned name, so the app can run on a laptop while rendering
+happens on the 4090. This fixed a real bug: a local absolute path handed to a
+remote ComfyUI loads nothing, the render reports success, and the reference is
+silently ignored — characters drift while the logs look clean.
 
 **Routing** is automatic but advisory — `route_shot` returns a recommendation
 *and its reasoning*, because a wrong call wastes either credits or a take.
@@ -200,16 +217,19 @@ production, not just Harry's work.
 | `test_shell_safety` | 34 command shapes | 0 failures |
 | `test_agent_loop` | 26 checks, 8 scenarios | 0 failures |
 | `test_pipeline` | 51 checks, 7 scenarios | 0 failures |
+| `test_remote_gpu` | 40 checks, 6 scenarios | 0 failures |
 | `test_app_smoke` | app builds + wiring | 0 failures |
 
-Run: `python tests\test_pipeline.py` (each is standalone).
+Run: `python tests\test_remote_gpu.py` (each is standalone).
 
 **What is *not* verified:** no live LLM call, no live ComfyUI, no FLUX render, no
-Minimax / LTX / Runway call, no browser session. The handover's open item 1 —
+Minimax / LTX / Runway clip, no browser session. The handover's open item 1 —
 that no Harry prompt change has been validated against a real model — is still
 true, and now applies to the agent loop and the whole model chain too.
 
 The three things that convert this from sound to proven, in order:
-1. One real FLUX keyframe with IP-Adapter holding a face.
+1. **One real FLUX keyframe with IP-Adapter holding a face**, driven from this
+   app against the GPU machine. This proves the upload path *and* the continuity
+   claim in one go.
 2. One real clip from each of the three video routes.
 3. A real Harry run on the corrected poem.

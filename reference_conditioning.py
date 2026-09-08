@@ -53,8 +53,16 @@ def _mode(cfg) -> str:
 
 
 def apply_reference(workflow: dict, cfg, reference_image_path: str,
-                    scene_image_path: str = "", weight: float = 0.0):
+                    scene_image_path: str = "", weight: float = 0.0,
+                    upload=None):
     """Return (workflow, warning). warning is "" when everything asked for landed.
+
+    `upload` turns a local path into something ComfyUI can actually open, and is
+    required whenever ComfyUI is not on this machine: a LoadImage node given an
+    absolute local path from a different computer silently loads nothing, and the
+    generation then looks successful while ignoring the reference entirely.
+    Callers pass ComfyClient.upload_image. When it is omitted the local path is
+    used, which is only correct for a same-machine ComfyUI.
 
     The workflow dict is already a deep copy by the time it reaches here
     (apply_node_overrides copies), so editing in place is safe.
@@ -77,7 +85,7 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
             notes.append(f"turnaround sheet not found, identity not locked: {reference_image_path}")
         else:
             note = _apply_ipadapter(workflow, reference_image_path,
-                                    weight or _default_weight(cfg))
+                                    weight or _default_weight(cfg), upload)
             if note:
                 notes.append(note)
 
@@ -85,7 +93,7 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
         if not os.path.exists(scene_image_path):
             notes.append(f"scene concept not found, background not anchored: {scene_image_path}")
         else:
-            note = _apply_img2img(workflow, scene_image_path)
+            note = _apply_img2img(workflow, scene_image_path, upload)
             if note:
                 notes.append(note)
 
@@ -96,7 +104,19 @@ def _default_weight(cfg) -> float:
     return float(getattr(getattr(cfg, "agent", None), "ipadapter_weight", 0.8) or 0.8)
 
 
-def _apply_ipadapter(workflow: dict, image_path: str, weight: float) -> str:
+def _resolve(image_path: str, upload) -> str:
+    """What this workflow should put in a LoadImage node's `image` field.
+
+    With an uploader, that's the name ComfyUI returned after receiving the file.
+    Without one, it's the local path, which only works when ComfyUI is running on
+    this same machine.
+    """
+    if upload is None:
+        return os.path.abspath(image_path)
+    return upload(image_path)
+
+
+def _apply_ipadapter(workflow: dict, image_path: str, weight: float, upload=None) -> str:
     """Point the IP-Adapter's image input at the turnaround sheet."""
     adapter_id, adapter = _find(workflow, IPADAPTER_CLASSES)
     if adapter_id is None:
@@ -112,20 +132,25 @@ def _apply_ipadapter(workflow: dict, image_path: str, weight: float) -> str:
     link = (adapter.get("inputs") or {}).get("image")
     target_id = link[0] if isinstance(link, list) and link else None
 
+    try:
+        reference = _resolve(image_path, upload)
+    except Exception as error:  # noqa: BLE001 - reported, never silently skipped
+        return f"could not send the turnaround to ComfyUI, identity not locked: {error}"
+
     if target_id and isinstance(workflow.get(target_id), dict):
-        workflow[target_id].setdefault("inputs", {})["image"] = os.path.abspath(image_path)
+        workflow[target_id].setdefault("inputs", {})["image"] = reference
         return ""
 
     loader_id, loader = _find(workflow, LOAD_IMAGE_CLASSES)
     if loader_id is None:
         return ("the IP-Adapter node has no LoadImage feeding it, so the turnaround was not "
                 "applied -- add a LoadImage node and connect it to the adapter's image input")
-    loader.setdefault("inputs", {})["image"] = os.path.abspath(image_path)
+    loader.setdefault("inputs", {})["image"] = reference
     adapter.setdefault("inputs", {})["image"] = [loader_id, 0]
     return ""
 
 
-def _apply_img2img(workflow: dict, image_path: str) -> str:
+def _apply_img2img(workflow: dict, image_path: str, upload=None) -> str:
     """Anchor the background by encoding the scene concept as the start latent."""
     encode_id, encode = _find(workflow, LATENT_CLASSES)
     if encode_id is None:
@@ -133,10 +158,15 @@ def _apply_img2img(workflow: dict, image_path: str) -> str:
                 "background -- add a LoadImage into a VAEEncode and feed the sampler's "
                 "latent_image from it")
 
+    try:
+        reference = _resolve(image_path, upload)
+    except Exception as error:  # noqa: BLE001 - reported, never silently skipped
+        return f"could not send the scene concept to ComfyUI, background not anchored: {error}"
+
     link = (encode.get("inputs") or {}).get("pixels")
     target_id = link[0] if isinstance(link, list) and link else None
     if target_id and isinstance(workflow.get(target_id), dict):
-        workflow[target_id].setdefault("inputs", {})["image"] = os.path.abspath(image_path)
+        workflow[target_id].setdefault("inputs", {})["image"] = reference
         return ""
 
     loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
@@ -145,7 +175,7 @@ def _apply_img2img(workflow: dict, image_path: str) -> str:
                 "the VAEEncode")
     # Take the last loader so we don't steal the one IP-Adapter is using.
     loader_id, loader = loaders[-1]
-    loader.setdefault("inputs", {})["image"] = os.path.abspath(image_path)
+    loader.setdefault("inputs", {})["image"] = reference
     encode.setdefault("inputs", {})["pixels"] = [loader_id, 0]
     return ""
 

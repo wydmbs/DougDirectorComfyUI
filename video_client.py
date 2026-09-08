@@ -1,36 +1,39 @@
 """
-video_client.py -- turning a staged keyframe into a moving clip.
+video_client.py -- turning a staged keyframe into a clip, through ComfyUI.
 
-Three backends, one interface, because the shot decides the model:
+Everything after the ChatGPT draft runs on the GPU machine. LTX-2.5 is local
+weights; Minimax H3 and Runway Gen-4 are reached through ComfyUI's API nodes.
+That means all three are the same thing from here: a workflow, submitted to the
+same ComfyUI, with the keyframe uploaded first.
 
-  Minimax H3     performance. Takes the keyframe AND the turnaround sheet
-                 through REF2VA, which is precisely why a head turn holds
-                 together instead of melting.
-  LTX-2.5        camera. Runs locally through ComfyUI, so it's free and fast,
-                 and it can cut between shots natively.
-  Runway Gen-4   physics. Cloud, short bursts, for the destruction and fluids
-                 the local models still fumble.
+This is a deliberate simplification over talking to each vendor's REST API
+directly. One connection to configure, credentials live in ComfyUI where they
+belong rather than in this app's config, and the render happens where the GPU
+is. The cost is that each model needs its own exported API-format workflow --
+which is work the director has to do once, in ComfyUI, and can then reuse.
 
-LTX goes through the existing ComfyUI client, since it is just another
-workflow. The two cloud models are HTTP APIs and are implemented as submit +
-poll, which is what both actually offer.
-
-Every backend returns the same VideoResult, so the caller -- and Harry -- never
-has to care which one ran.
+Each workflow is patched the same way:
+  * the keyframe goes into the LoadImage node
+  * the turnaround, if the model takes one, goes into a second LoadImage
+  * the motion prompt goes into the text encode
+  * the duration goes into whatever node exposes one
 """
 
 import json
 import os
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import model_pipeline as pipeline
+from comfy_client import ComfyClient, ComfyClientError
 
-POLL_SECONDS = 5.0
-DEFAULT_TIMEOUT = 1800
+DEFAULT_TIMEOUT = 2400
+
+# Node classes that carry each kind of input, in preference order.
+IMAGE_LOADERS = ("LoadImage", "LoadImageFromPath")
+TEXT_NODES = ("CLIPTextEncode", "MinimaxTextPrompt", "RunwayTextPrompt", "String",
+              "PrimitiveString", "LTXVTextPrompt")
+DURATION_KEYS = ("duration", "seconds", "length", "num_frames", "frames", "video_length")
 
 
 class VideoError(Exception):
@@ -49,39 +52,13 @@ class VideoResult:
         return bool(self.clip_path)
 
 
-def _post_json(url: str, headers: dict, payload: dict, timeout: int = 120) -> dict:
-    request = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:600]
-        raise VideoError(f"HTTP {error.code}: {detail}") from error
-    except urllib.error.URLError as error:
-        raise VideoError(f"Could not reach the service: {error.reason}") from error
-
-
-def _get_json(url: str, headers: dict, timeout: int = 60) -> dict:
-    request = urllib.request.Request(url, headers=headers)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:600]
-        raise VideoError(f"HTTP {error.code}: {detail}") from error
-    except urllib.error.URLError as error:
-        raise VideoError(f"Could not reach the service: {error.reason}") from error
-
-
-def _download(url: str, dest: str) -> str:
-    os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
-    try:
-        with urllib.request.urlopen(url, timeout=600) as response, open(dest, "wb") as handle:
-            handle.write(response.read())
-    except (urllib.error.URLError, OSError) as error:
-        raise VideoError(f"Could not download the finished clip: {error}") from error
-    return dest
+def workflow_path_for(cfg, model_key: str) -> str:
+    """Where the exported API-format workflow for this model lives."""
+    return {
+        pipeline.CLIP_MINIMAX.key: cfg.video.minimax_workflow_path,
+        pipeline.CLIP_LTX.key: cfg.video.ltx_workflow_path,
+        pipeline.CLIP_RUNWAY.key: cfg.video.runway_workflow_path,
+    }.get(model_key, "")
 
 
 def _clip_path(cfg, entry_id: str, model_key: str, extension: str = "mp4") -> str:
@@ -91,14 +68,68 @@ def _clip_path(cfg, entry_id: str, model_key: str, extension: str = "mp4") -> st
     return os.path.join(folder, f"{safe}__{model_key}.{extension}")
 
 
-# ------------------------------------------------------------------- mock
+def _find_all(workflow: dict, class_types) -> list:
+    return [(nid, n) for nid, n in workflow.items()
+            if isinstance(n, dict) and n.get("class_type") in class_types]
+
+
+def _patch_workflow(workflow: dict, keyframe_ref: str, turnaround_ref: str,
+                    motion_prompt: str, seconds: float) -> list:
+    """Put this shot's inputs into the workflow. Returns warnings."""
+    warnings = []
+
+    loaders = _find_all(workflow, IMAGE_LOADERS)
+    if not loaders:
+        warnings.append(
+            "this workflow has no LoadImage node, so the keyframe was not applied -- "
+            "the clip will not be based on your staged frame")
+    else:
+        loaders[0][1].setdefault("inputs", {})["image"] = keyframe_ref
+        if turnaround_ref:
+            if len(loaders) > 1:
+                loaders[1][1].setdefault("inputs", {})["image"] = turnaround_ref
+            else:
+                warnings.append(
+                    "this workflow has only one LoadImage, so the turnaround sheet was not "
+                    "passed -- add a second image input for REF2VA or a large head turn may drift")
+
+    text_nodes = _find_all(workflow, TEXT_NODES)
+    if motion_prompt:
+        if not text_nodes:
+            warnings.append("no text node found, so the motion prompt was not applied")
+        for _, node in text_nodes:
+            inputs = node.setdefault("inputs", {})
+            for key in ("text", "prompt", "value", "string"):
+                if isinstance(inputs.get(key), str):
+                    inputs[key] = motion_prompt
+                    break
+
+    if seconds:
+        applied = False
+        for node in workflow.values():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs") or {}
+            for key in DURATION_KEYS:
+                if key in inputs and isinstance(inputs[key], (int, float)):
+                    inputs[key] = int(seconds) if key in ("num_frames", "frames") else seconds
+                    applied = True
+                    break
+        if not applied:
+            warnings.append(
+                f"no duration field found, so the clip length is whatever the workflow "
+                f"is set to rather than {seconds:g}s")
+
+    return warnings
 
 
 def generate_mock(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
                   model_key: str, **kwargs) -> VideoResult:
-    """Write a placeholder file so the whole pipeline is exercisable with no GPU
-    and no credits. Deliberately not a real video -- it exists to prove the
-    registry wiring, and says so."""
+    """Write a placeholder so the pipeline is walkable with no GPU and no credits.
+
+    Deliberately not a real video -- it exists to prove the registry wiring, and
+    says so in its own contents.
+    """
     path = _clip_path(cfg, entry_id, model_key, "txt")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(
@@ -108,220 +139,158 @@ def generate_mock(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
                        ["mock mode: this is a placeholder file, not a real clip"])
 
 
-# --------------------------------------------------------------- Minimax H3
-
-
-def generate_minimax(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
-                     turnaround_path: str = "", seconds: float = 10.0,
-                     on_progress: Optional[Callable[[str], None]] = None,
-                     **kwargs) -> VideoResult:
-    """REF2VA: the keyframe for layout, the turnaround for identity.
-
-    Passing both is the entire reason this model is chosen for performance
-    shots -- with the side and back profiles available it can rotate a head
-    without inventing a face.
-    """
-    key = os.environ.get(cfg.video.minimax_api_key_env, "")
-    if not key:
-        raise VideoError(
-            f"No Minimax key. Set {cfg.video.minimax_api_key_env} and restart the app.")
-    if not os.path.exists(keyframe_path):
-        raise VideoError(f"Keyframe not found: {keyframe_path}")
-
-    references = [{"type": "keyframe", "image": os.path.abspath(keyframe_path)}]
-    warnings = []
-    if turnaround_path and os.path.exists(turnaround_path):
-        references.append({"type": "character_reference",
-                           "image": os.path.abspath(turnaround_path)})
-    else:
-        warnings.append(
-            "no turnaround sheet was passed, so the face has only the keyframe to work "
-            "from -- a large head turn may drift")
-
-    cap = pipeline.CLIP_MINIMAX.max_seconds
-    if seconds > cap:
-        warnings.append(f"clipped to Minimax's {cap:g}s ceiling")
-        seconds = cap
-
-    base = cfg.video.minimax_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    submitted = _post_json(f"{base}/video_generation", headers, {
-        "model": cfg.video.minimax_model,
-        "prompt": motion_prompt,
-        "duration": seconds,
-        "references": references,
-    })
-    task_id = submitted.get("task_id") or submitted.get("id")
-    if not task_id:
-        raise VideoError(f"Minimax did not return a task id: {str(submitted)[:300]}")
-
-    deadline = time.time() + DEFAULT_TIMEOUT
-    while time.time() < deadline:
-        if on_progress:
-            on_progress(f"Minimax H3 rendering ({int(deadline - time.time())}s left)")
-        time.sleep(POLL_SECONDS)
-        status = _get_json(f"{base}/query/video_generation?task_id={task_id}", headers)
-        state = (status.get("status") or status.get("state") or "").lower()
-        if state in ("success", "succeeded", "finished"):
-            url = (status.get("file_url") or status.get("video_url")
-                   or (status.get("result") or {}).get("video_url"))
-            if not url:
-                raise VideoError("Minimax reported success but returned no video URL.")
-            path = _download(url, _clip_path(cfg, entry_id, pipeline.CLIP_MINIMAX.key))
-            return VideoResult(path, pipeline.CLIP_MINIMAX.key, seconds, warnings)
-        if state in ("failed", "error"):
-            raise VideoError(f"Minimax failed: {status.get('message') or str(status)[:300]}")
-
-    raise VideoError(f"Minimax was still rendering after {DEFAULT_TIMEOUT}s.")
-
-
-# ------------------------------------------------------------------- LTX-2.5
-
-
-def generate_ltx(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
-                 seconds: float = 5.0,
-                 on_progress: Optional[Callable[[str], None]] = None,
-                 **kwargs) -> VideoResult:
-    """LTX runs as an ordinary ComfyUI workflow, so it reuses the same client."""
-    from comfy_client import ComfyClient, ComfyClientError
-
-    workflow_path = cfg.video.ltx_workflow_path
-    if not workflow_path or not os.path.exists(workflow_path):
-        raise VideoError(
-            "No LTX workflow is configured. Build one in ComfyUI, export it with "
-            "Save (API Format), and point Setup at it.")
-    if not os.path.exists(keyframe_path):
-        raise VideoError(f"Keyframe not found: {keyframe_path}")
-
-    with open(workflow_path, "r", encoding="utf-8") as handle:
-        workflow = json.load(handle)
-
-    warnings = []
-    patched = False
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        klass = node.get("class_type", "")
-        if klass in ("LoadImage", "LoadImageFromPath"):
-            node.setdefault("inputs", {})["image"] = os.path.abspath(keyframe_path)
-            patched = True
-        elif klass == "CLIPTextEncode" and motion_prompt:
-            inputs = node.setdefault("inputs", {})
-            if isinstance(inputs.get("text"), str):
-                inputs["text"] = motion_prompt
-    if not patched:
-        warnings.append("the LTX workflow has no LoadImage node, so the keyframe was not applied")
-
-    client = ComfyClient(cfg.comfyui_url)
-    try:
-        if on_progress:
-            on_progress("LTX-2.5 rendering locally")
-        prompt_id = client.queue_prompt(workflow)
-        history = client.wait_for_completion(prompt_id, timeout_s=DEFAULT_TIMEOUT)
-    except ComfyClientError as error:
-        raise VideoError(str(error)) from error
-
-    for node_output in (history.get("outputs") or {}).values():
-        for item in (node_output.get("gifs") or node_output.get("videos") or []):
-            filename = item.get("filename")
-            if not filename:
-                continue
-            data = client.fetch_image_bytes(filename, item.get("subfolder", ""),
-                                            item.get("type", "output"))
-            extension = os.path.splitext(filename)[1].lstrip(".") or "mp4"
-            path = _clip_path(cfg, entry_id, pipeline.CLIP_LTX.key, extension)
-            with open(path, "wb") as handle:
-                handle.write(data)
-            return VideoResult(path, pipeline.CLIP_LTX.key, seconds, warnings)
-
-    raise VideoError("LTX finished but produced no video output node.")
-
-
-# -------------------------------------------------------------- Runway Gen-4
-
-
-def generate_runway(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
-                    seconds: float = 5.0,
-                    on_progress: Optional[Callable[[str], None]] = None,
-                    **kwargs) -> VideoResult:
-    key = os.environ.get(cfg.video.runway_api_key_env, "")
-    if not key:
-        raise VideoError(
-            f"No Runway key. Set {cfg.video.runway_api_key_env} and restart the app.")
-    if not os.path.exists(keyframe_path):
-        raise VideoError(f"Keyframe not found: {keyframe_path}")
-
-    import base64
-
-    warnings = []
-    cap = pipeline.CLIP_RUNWAY.max_seconds
-    if seconds > cap:
-        warnings.append(f"clipped to Runway's {cap:g}s ceiling -- it is built for short bursts")
-        seconds = cap
-
-    with open(keyframe_path, "rb") as handle:
-        encoded = base64.b64encode(handle.read()).decode("ascii")
-
-    base = cfg.video.runway_url.rstrip("/")
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-               "X-Runway-Version": cfg.video.runway_version}
-    submitted = _post_json(f"{base}/image_to_video", headers, {
-        "model": cfg.video.runway_model,
-        "promptImage": f"data:image/png;base64,{encoded}",
-        "promptText": motion_prompt,
-        "duration": int(seconds),
-    })
-    task_id = submitted.get("id")
-    if not task_id:
-        raise VideoError(f"Runway did not return a task id: {str(submitted)[:300]}")
-
-    deadline = time.time() + DEFAULT_TIMEOUT
-    while time.time() < deadline:
-        if on_progress:
-            on_progress("Runway Gen-4 rendering")
-        time.sleep(POLL_SECONDS)
-        status = _get_json(f"{base}/tasks/{task_id}", headers)
-        state = (status.get("status") or "").upper()
-        if state == "SUCCEEDED":
-            output = status.get("output") or []
-            url = output[0] if isinstance(output, list) and output else None
-            if not url:
-                raise VideoError("Runway reported success but returned no output URL.")
-            path = _download(url, _clip_path(cfg, entry_id, pipeline.CLIP_RUNWAY.key))
-            return VideoResult(path, pipeline.CLIP_RUNWAY.key, seconds, warnings)
-        if state in ("FAILED", "CANCELLED"):
-            raise VideoError(f"Runway failed: {status.get('failure') or state}")
-
-    raise VideoError(f"Runway was still rendering after {DEFAULT_TIMEOUT}s.")
-
-
-# ------------------------------------------------------------------ router
-
-BACKENDS = {
-    pipeline.CLIP_MINIMAX.key: generate_minimax,
-    pipeline.CLIP_LTX.key: generate_ltx,
-    pipeline.CLIP_RUNWAY.key: generate_runway,
-}
-
-
 def generate_clip(cfg, entry_id: str, keyframe_path: str, motion_prompt: str,
                   model_key: str = "", turnaround_path: str = "", seconds: float = 0.0,
                   on_progress: Optional[Callable[[str], None]] = None) -> VideoResult:
-    """Produce a clip with whichever model the shot calls for."""
+    """Produce a clip with whichever model the shot calls for.
+
+    All three routes go through the same ComfyUI on the GPU machine; only the
+    workflow differs.
+    """
     if not model_key:
         raise VideoError("No video model was chosen for this shot.")
+    spec = pipeline.MODELS.get(model_key)
+    if spec is None:
+        raise VideoError(f"'{model_key}' isn't a known video model.")
 
     if getattr(cfg, "mock_mode", False):
         return generate_mock(cfg, entry_id, keyframe_path, motion_prompt, model_key)
 
-    backend = BACKENDS.get(model_key)
-    if backend is None:
-        raise VideoError(f"No backend for '{model_key}'. Known: {', '.join(BACKENDS)}")
+    if not os.path.exists(keyframe_path):
+        raise VideoError(f"Keyframe not found: {keyframe_path}")
 
-    spec = pipeline.MODELS.get(model_key)
+    path = workflow_path_for(cfg, model_key)
+    if not path or not os.path.exists(path):
+        raise VideoError(
+            f"No workflow is configured for {spec.name}. Build one in ComfyUI on the GPU "
+            f"machine, export it with Save (API Format), and point Setup at it.")
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            workflow = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        raise VideoError(f"Could not read the {spec.name} workflow: {error}") from error
+
+    if "nodes" in workflow:
+        raise VideoError(
+            f"The {spec.name} workflow looks like a UI export, not API format. In ComfyUI "
+            f"enable Dev mode options and use 'Save (API Format)'.")
+
+    warnings = []
     if not seconds:
-        seconds = min(5.0, spec.max_seconds) if spec and spec.max_seconds else 5.0
+        seconds = min(5.0, spec.max_seconds) if spec.max_seconds else 5.0
+    if spec.max_seconds and seconds > spec.max_seconds:
+        warnings.append(f"clipped to {spec.name}'s {spec.max_seconds:g}s ceiling")
+        seconds = spec.max_seconds
 
-    return backend(cfg, entry_id=entry_id, keyframe_path=keyframe_path,
-                   motion_prompt=motion_prompt, turnaround_path=turnaround_path,
-                   seconds=seconds, on_progress=on_progress)
+    client = ComfyClient(cfg.comfyui_url)
+    if not client.ping():
+        raise VideoError(
+            f"ComfyUI isn't answering at {cfg.comfyui_url}. Start it on the GPU machine, "
+            f"or check the URL in Setup.")
+
+    try:
+        keyframe_ref = client.upload_image(keyframe_path)
+        turnaround_ref = ""
+        if turnaround_path and os.path.exists(turnaround_path):
+            turnaround_ref = client.upload_image(turnaround_path)
+        elif model_key == pipeline.CLIP_MINIMAX.key:
+            warnings.append(
+                "no turnaround sheet was passed to REF2VA, so the face has only the keyframe "
+                "to work from -- a large head turn may drift")
+
+        work = json.loads(json.dumps(workflow))
+        warnings.extend(_patch_workflow(work, keyframe_ref, turnaround_ref,
+                                        motion_prompt, seconds))
+
+        if on_progress:
+            on_progress(f"{spec.name} rendering on the GPU machine")
+        prompt_id = client.queue_prompt(work)
+        history = client.wait_for_completion(
+            prompt_id, timeout_s=DEFAULT_TIMEOUT,
+            on_progress=(lambda s: on_progress(f"{spec.name} rendering ({s}s)")) if on_progress else None)
+    except ComfyClientError as error:
+        raise VideoError(str(error)) from error
+
+    refs = client.extract_video_refs(history)
+    if not refs:
+        refs = client.extract_image_refs(history)
+        if refs:
+            warnings.append(
+                "the workflow returned an image rather than a video -- check its output node")
+    if not refs:
+        raise VideoError(
+            f"{spec.name} finished but produced no output. Check the workflow has a "
+            f"video output node (VHS_VideoCombine or similar).")
+
+    filename, subfolder, folder_type = refs[0]
+    extension = os.path.splitext(filename)[1].lstrip(".") or "mp4"
+    destination = _clip_path(cfg, entry_id, model_key, extension)
+    try:
+        data = client.fetch_image_bytes(filename, subfolder, folder_type)
+    except (ComfyClientError, OSError) as error:
+        raise VideoError(f"Could not download the finished clip: {error}") from error
+    with open(destination, "wb") as handle:
+        handle.write(data)
+
+    return VideoResult(destination, model_key, seconds, warnings)
+
+
+def readiness(cfg) -> dict:
+    """Which parts of the clip stage are actually ready to run.
+
+    Worth checking before planning a night of rendering, rather than finding out
+    when the first shot fails.
+    """
+    client = ComfyClient(cfg.comfyui_url)
+    reachable = client.ping()
+    report = {
+        "comfyui_url": cfg.comfyui_url,
+        "comfyui_reachable": reachable,
+        "mock_mode": bool(cfg.mock_mode),
+        "models": {},
+    }
+    if reachable:
+        try:
+            stats = client.system_stats()
+            devices = stats.get("devices") or []
+            if devices:
+                device = devices[0]
+                report["gpu"] = device.get("name", "unknown")
+                total = device.get("vram_total")
+                free = device.get("vram_free")
+                if isinstance(total, (int, float)):
+                    report["vram_total_gb"] = round(total / (1024 ** 3), 1)
+                if isinstance(free, (int, float)):
+                    report["vram_free_gb"] = round(free / (1024 ** 3), 1)
+        except ComfyClientError:
+            pass
+
+    available_classes = set()
+    if reachable:
+        try:
+            available_classes = set(client.object_info().keys())
+        except ComfyClientError:
+            pass
+
+    for key in (pipeline.CLIP_MINIMAX.key, pipeline.CLIP_LTX.key, pipeline.CLIP_RUNWAY.key):
+        spec = pipeline.MODELS[key]
+        path = workflow_path_for(cfg, key)
+        entry = {
+            "name": spec.name,
+            "workflow": os.path.basename(path) if path else "",
+            "workflow_present": bool(path and os.path.exists(path)),
+        }
+        if entry["workflow_present"] and available_classes:
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    work = json.load(handle)
+                needed = {n.get("class_type") for n in work.values()
+                          if isinstance(n, dict) and n.get("class_type")}
+                entry["missing_nodes"] = sorted(needed - available_classes)
+            except (OSError, json.JSONDecodeError):
+                entry["missing_nodes"] = ["(workflow unreadable)"]
+        entry["ready"] = entry["workflow_present"] and not entry.get("missing_nodes")
+        report["models"][key] = entry
+
+    return report

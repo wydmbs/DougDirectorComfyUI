@@ -45,21 +45,16 @@ class AzureConfig:
 
 @dataclass
 class VideoConfig:
-    """Where the clip-stage models live and what they're called.
+    """The clip stage runs on the GPU machine, through ComfyUI.
 
-    Endpoints and model names are config rather than constants because these
-    services rename and re-version far faster than this app will be rebuilt.
+    LTX-2.5 is local weights; Minimax H3 and Runway Gen-4 are reached through
+    ComfyUI's API nodes. So all three are workflows rather than direct REST
+    calls: one connection to configure, and the vendor credentials live in
+    ComfyUI where they belong rather than in this app's config file.
     """
-    minimax_url: str = "https://api.minimax.chat/v1"
-    minimax_model: str = "MiniMax-Hailuo-H3"
-    minimax_api_key_env: str = "MINIMAX_API_KEY"
-
+    minimax_workflow_path: str = ""
     ltx_workflow_path: str = ""
-
-    runway_url: str = "https://api.dev.runwayml.com/v1"
-    runway_model: str = "gen4_turbo"
-    runway_version: str = "2024-11-06"
-    runway_api_key_env: str = "RUNWAY_API_KEY"
+    runway_workflow_path: str = ""
 
 
 @dataclass

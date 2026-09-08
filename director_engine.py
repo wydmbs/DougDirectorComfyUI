@@ -134,7 +134,13 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
             work = apply_node_overrides(workflow, cfg.node_mapping, prompt_positive, prompt_negative, seed)
             if reference_image_path or scene_image_path:
                 from reference_conditioning import apply_reference
-                work, note = apply_reference(work, cfg, reference_image_path, scene_image_path)
+                # Always upload rather than pass a path. It is correct whether
+                # ComfyUI is on this machine or the GPU box, and the failure mode
+                # of getting it wrong is invisible: a LoadImage pointed at a path
+                # that doesn't exist on the ComfyUI host silently loads nothing,
+                # so the render looks fine and quietly ignores the reference.
+                work, note = apply_reference(work, cfg, reference_image_path, scene_image_path,
+                                             upload=client.upload_image)
                 if note and note not in warnings:
                     warnings.append(note)
             prompt_id = client.queue_prompt(work)

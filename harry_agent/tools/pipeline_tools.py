@@ -217,6 +217,47 @@ def build_pipeline_tools(cfg, video_fn=None) -> list:
                                  "will drift between shots.")
         return json.dumps(report, indent=2)
 
+    def draft_prompt(entry_id: str, entry_type: str, subject: str, description: str = "",
+                     era: str = "", continuity: str = "", palette: str = "",
+                     lighting: str = "", mood: str = "") -> str:
+        """Write the ChatGPT prompt for an asset's draft.
+
+        Drafting is a manual handoff: this returns text for the director to paste
+        into ChatGPT. Nothing is generated here.
+        """
+        import draft_prompts
+
+        try:
+            prompt = draft_prompts.build(
+                entry_type, subject, description=description, era=era,
+                continuity=continuity, palette=palette, lighting=lighting, mood=mood)
+        except ValueError as error:
+            return str(error)
+        return json.dumps({
+            "entry_id": entry_id,
+            "entry_type": entry_type.upper(),
+            "prompt_for_chatgpt": prompt,
+            "next_step": ("Give this to the director to paste into ChatGPT. When they bring "
+                          "the image back, attach it with attach_draft."),
+        }, indent=2)
+
+    def gpu_readiness() -> str:
+        """Is the GPU machine actually ready to render?"""
+        from video_client import readiness
+
+        report = readiness(cfg)
+        if report["mock_mode"]:
+            report["note"] = ("Mock mode is on, so nothing real will render. Turn it off in "
+                              "Setup once ComfyUI is up on the GPU machine.")
+        elif not report["comfyui_reachable"]:
+            report["note"] = (f"ComfyUI isn't answering at {report['comfyui_url']}. Start it on "
+                              f"the GPU machine, and check the URL in Setup if it's remote.")
+        else:
+            not_ready = [v["name"] for v in report["models"].values() if not v["ready"]]
+            report["note"] = ("Every video route is ready." if not not_ready
+                              else "Still to set up: " + ", ".join(not_ready))
+        return json.dumps(report, indent=2, default=str)
+
     def obj(**properties):
         return {"type": "object", "properties": properties,
                 "required": [k for k, v in properties.items() if v.pop("_required", False)]}
@@ -240,6 +281,23 @@ def build_pipeline_tools(cfg, video_fn=None) -> list:
         Tool("check_reference_setup",
              "Whether the configured FLUX workflow can actually lock a character's identity via IP-Adapter.",
              obj(), check_reference_setup),
+        Tool("gpu_readiness",
+             "Whether the GPU machine's ComfyUI is reachable and which video routes have a working "
+             "workflow. Check this before planning a long render.",
+             obj(), gpu_readiness),
+        Tool("draft_prompt",
+             "Write the ChatGPT prompt for an asset's draft. Drafting is a manual handoff — this "
+             "returns text for the director to paste into ChatGPT, it does not generate anything.",
+             obj(entry_id=s("e.g. CHARACTER:pig", True),
+                 entry_type=s("CHARACTER, PROP or BACKDROP", True),
+                 subject=s("What it is, in a line", True),
+                 description=s("Fuller description"),
+                 era=s("Period constraint"),
+                 continuity=s("Continuity notes that must hold"),
+                 palette=s("Colour palette to respect"),
+                 lighting=s("Scenes only: the light in this place"),
+                 mood=s("Scenes only: the mood")),
+             draft_prompt),
         Tool("attach_draft",
              "Register a ChatGPT/DALL-E concept image as an asset's draft — the reference everything downstream anchors to.",
              obj(entry_id=s("e.g. CHARACTER:pig", True),

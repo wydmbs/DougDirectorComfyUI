@@ -35,7 +35,9 @@ import sheet_composer as composer
 import harry_advisor as harry
 import project_manager as projects
 import director_engine as engine
+import draft_prompts
 import harry_ui
+import model_pipeline as mpipe
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 # ---------------------------------------------------------------------------
@@ -935,6 +937,128 @@ def harry_agent_deny():
     return harry_rail_html(), "", gr.update(visible=False)
 
 
+def _textbox(**kwargs):
+    """Build a Textbox, dropping arguments this Gradio version doesn't know.
+
+    show_copy_button exists in Gradio 4 and 5 but was removed in 6, and the
+    project supports >=4.44. Rather than pin a version or lose the copy button
+    on the versions that have it, ask the constructor what it accepts.
+    """
+    import inspect
+
+    try:
+        accepted = set(inspect.signature(gr.Textbox.__init__).parameters)
+    except (TypeError, ValueError):
+        accepted = set(kwargs)
+    dropped = [k for k in kwargs if k not in accepted and k != "self"]
+    for key in dropped:
+        kwargs.pop(key)
+    return gr.Textbox(**kwargs)
+
+
+def draft_prompt_ui(entry_type, subject, description, era, continuity, palette,
+                    lighting, mood):
+    """Write the ChatGPT prompt for a draft.
+
+    Drafting stays manual on purpose: ChatGPT has no API here and no seed
+    control, so the app writes the prompt and the director carries the image
+    back. Everything downstream anchors to that image, so the prompt is worth
+    getting exactly right.
+    """
+    if not (subject or "").strip():
+        return "", reward_card("⚠️ Say what you're drafting first — a line is enough.")
+    try:
+        prompt = draft_prompts.build(
+            entry_type, subject.strip(), description=description or "", era=era or "",
+            continuity=continuity or "", palette=palette or "",
+            lighting=lighting or "", mood=mood or "")
+    except ValueError as error:
+        return "", reward_card(f"⚠️ {error}")
+    steps = "".join(f"<li>{s}</li>" for s in draft_prompts.HANDOFF_STEPS)
+    return prompt, (
+        '<div class="reward-card win"><strong>Prompt ready.</strong>'
+        f'<ol style="margin:8px 0 0 18px;padding:0;font-size:12.5px;line-height:1.6;">{steps}</ol></div>'
+    )
+
+
+def attach_draft_ui(entry_id, entry_type, draft_file, description, beat, prompt_text):
+    """Bring the ChatGPT image back in as the asset's draft."""
+    if not (entry_id or "").strip():
+        return reward_card("⚠️ Name the asset first — e.g. CHARACTER:pig."), gr.update(), gr.update()
+    if not draft_file:
+        return reward_card("⚠️ Attach the image you saved from ChatGPT."), gr.update(), gr.update()
+
+    source = draft_file if isinstance(draft_file, str) else getattr(draft_file, "name", "")
+    if not source or not os.path.exists(source):
+        return reward_card("⚠️ That file could not be read."), gr.update(), gr.update()
+
+    os.makedirs(CFG.images_dir, exist_ok=True)
+    safe = entry_id.strip().replace(":", "_")
+    destination = os.path.join(CFG.images_dir, f"{safe}__draft{os.path.splitext(source)[1] or '.png'}")
+    shutil.copy2(source, destination)
+
+    try:
+        engine.lock_concept(
+            CFG, entry_id.strip(), entry_type, beat or "", description or "",
+            prompt_positive=prompt_text or "", prompt_negative="", seed=0,
+            image_path=destination, note="draft from ChatGPT")
+    except engine.EngineError as error:
+        return reward_card(f"⚠️ {error}"), gr.update(), gr.update()
+
+    return (reward_card(f"🎨 Draft locked for {entry_id.strip()} — that's the reference "
+                        f"everything else is anchored to."),
+            destination, harry_rail_html())
+
+
+def save_video_workflows(ltx_path, minimax_path, runway_path):
+    """Record which exported workflow drives each video route."""
+    CFG.video.ltx_workflow_path = (ltx_path or "").strip()
+    CFG.video.minimax_workflow_path = (minimax_path or "").strip()
+    CFG.video.runway_workflow_path = (runway_path or "").strip()
+    cfgmod.save_config(CFG)
+    missing = [name for name, path in
+               (("LTX-2.5", CFG.video.ltx_workflow_path),
+                ("Minimax H3", CFG.video.minimax_workflow_path),
+                ("Runway Gen-4", CFG.video.runway_workflow_path))
+               if path and not os.path.exists(path)]
+    if missing:
+        return reward_card(f"⚠️ Saved, but these files weren't found: {', '.join(missing)}")
+    return reward_card("💾 Saved.")
+
+
+def gpu_status_html():
+    """Where the rendering will actually happen, and whether it can."""
+    from video_client import readiness
+
+    try:
+        report = readiness(CFG)
+    except Exception as error:  # noqa: BLE001
+        return f'<div class="reward-card warn">Could not check the GPU machine: {error}</div>'
+
+    if report["mock_mode"]:
+        return ('<div class="reward-card warn">Mock mode is on — nothing renders for real. '
+                'Turn it off in Setup once ComfyUI is running on the GPU machine.</div>')
+
+    rows = []
+    for spec in report["models"].values():
+        state = "✅ ready" if spec["ready"] else (
+            "⚠️ no workflow" if not spec["workflow_present"] else
+            f"⚠️ missing nodes: {', '.join(spec.get('missing_nodes', [])[:3])}")
+        rows.append(f"<li><strong>{spec['name']}</strong> — {state}</li>")
+
+    if not report["comfyui_reachable"]:
+        return (f'<div class="reward-card warn">ComfyUI isn\'t answering at '
+                f'<code>{report["comfyui_url"]}</code>. Start it on the GPU machine, '
+                f'or fix the URL in Setup.</div>')
+
+    gpu = report.get("gpu", "GPU")
+    free = report.get("vram_free_gb")
+    vram = f" — {free}GB VRAM free" if free is not None else ""
+    return (f'<div class="reward-card win"><strong>{gpu}</strong>{vram} at '
+            f'<code>{report["comfyui_url"]}</code>'
+            f'<ul style="margin:8px 0 0 18px;padding:0;font-size:12.5px;">{"".join(rows)}</ul></div>')
+
+
 HARRY_GOALS = [
     "Finish the next unfinished panel on any sheet",
     "Complete every panel for one character sheet",
@@ -1459,6 +1583,27 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                 harry_provider = gr.Dropdown(label="Advisor model provider", choices=["Claude", "Azure OpenAI", "OpenAI", "Grok", "Ollama"], value=CFG.harry_provider,
                                              info="Claude is the default. Azure OpenAI uses the endpoint and deployment set below.")
                 harry_provider_note = gr.Markdown(harry.provider_status(CFG.harry_provider))
+
+                gr.Markdown("---\n#### 🖥️ The GPU machine")
+                gr.Markdown(
+                    "Everything after the ChatGPT draft renders through ComfyUI — FLUX for "
+                    "keyframes, and all three video routes. Point this at the GPU machine; "
+                    "images are uploaded to it, so a remote box works exactly like a local one."
+                )
+                gpu_status = gr.HTML(gpu_status_html())
+                gpu_refresh_btn = gr.Button("↻ Check the GPU machine", size="sm")
+                with gr.Row():
+                    ltx_workflow = gr.Textbox(label="LTX-2.5 workflow (API format)",
+                                              value=CFG.video.ltx_workflow_path,
+                                              placeholder="camera moves and cuts — local, free")
+                    minimax_workflow = gr.Textbox(label="Minimax H3 workflow (API format)",
+                                                  value=CFG.video.minimax_workflow_path,
+                                                  placeholder="dialogue and performance — REF2VA")
+                    runway_workflow = gr.Textbox(label="Runway Gen-4 workflow (API format)",
+                                                 value=CFG.video.runway_workflow_path,
+                                                 placeholder="physics and destruction")
+                video_save_btn = gr.Button("Save video workflows", size="sm")
+                video_save_status = gr.HTML("")
                 harry_provider.change(harry_provider_status, inputs=harry_provider, outputs=harry_provider_note)
 
             setup_status = gr.Markdown("")
@@ -1536,6 +1681,64 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             harry_transcribe_btn.click(harry_transcribe, inputs=harry_audio, outputs=[harry_source, harry_source_status])
             harry_run_btn.click(harry_analyze_ui, inputs=[harry_provider_run, harry_title, harry_source, harry_source_id, harry_audio, harry_text_file, harry_era],
                                 outputs=[harry_plan, harry_summary, harry_questions, harry_table, harry_source_id, harry_source, harry_status])
+            # ---------------------------------------------------------------
+            # Stage 1 of the pipeline: the ChatGPT handoff.
+            #
+            # Drafting is deliberately manual. ChatGPT has no API here and no
+            # seed control, so the app writes a precise prompt and the director
+            # carries the image back. It sits on Harry's tab because this is
+            # pre-production -- deciding what things look like, before any of it
+            # is staged in FLUX.
+            # ---------------------------------------------------------------
+            with gr.Accordion("🎨 Draft it in ChatGPT — the look, before the build", open=False):
+                gr.Markdown(
+                    "Everything downstream is anchored to these drafts, so they're worth "
+                    "getting right once. Harry writes the prompt; you paste it into ChatGPT, "
+                    "save the image, and bring it back here."
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        draft_type = gr.Radio(
+                            label="What are you drafting?",
+                            choices=[("Character turnaround", "CHARACTER"),
+                                     ("Prop sheet", "PROP"),
+                                     ("Scene concept", "BACKDROP")],
+                            value="CHARACTER")
+                        draft_subject = gr.Textbox(
+                            label="What is it?", placeholder="e.g. a stout farm pig in a tweed waistcoat",
+                            info="One line. The rest is detail.")
+                        draft_description = gr.Textbox(
+                            label="Fuller description", lines=3,
+                            placeholder="Build, costume, colouring, anything that must stay true across shots.")
+                        with gr.Row():
+                            draft_era = gr.Textbox(label="Period", placeholder="e.g. early 20th century maritime")
+                            draft_palette = gr.Textbox(label="Palette", placeholder="e.g. muted slate, oiled brass")
+                        draft_continuity = gr.Textbox(
+                            label="Continuity that must hold", lines=2,
+                            placeholder="e.g. the crate is already sealed by this point")
+                        with gr.Row():
+                            draft_lighting = gr.Textbox(label="Lighting (scenes)", placeholder="e.g. low sun through fog")
+                            draft_mood = gr.Textbox(label="Mood (scenes)", placeholder="e.g. uneasy calm")
+                        draft_write_btn = gr.Button("✍️ Write the ChatGPT prompt", variant="primary")
+                    with gr.Column(scale=1):
+                        draft_prompt_out = _textbox(
+                            label="Paste this into ChatGPT", lines=16, show_copy_button=True,
+                            info="Built to keep the background plain and the lighting flat, "
+                                 "because IP-Adapter reads a busy sheet as part of the character.")
+                        draft_prompt_status = gr.HTML("")
+
+                gr.Markdown("---\n#### Bring the image back")
+                with gr.Row():
+                    draft_entry_id = gr.Textbox(
+                        label="Name it", placeholder="e.g. CHARACTER:pig",
+                        info="Use the same id everywhere: CHARACTER:, PROP: or BACKDROP:.")
+                    draft_beat = gr.Textbox(label="Story beat", placeholder="e.g. The opening")
+                draft_file = gr.File(label="The image you saved from ChatGPT",
+                                     file_types=["image"], type="filepath")
+                draft_attach_btn = gr.Button("🎬 Attach as the draft", variant="primary")
+                draft_attach_status = gr.HTML("")
+                draft_preview = gr.Image(label="Locked draft", height=240)
+
             harry_goto_build_btn.click(lambda: gr.Tabs(selected="build"), outputs=main_tabs)
             harry_export_btn.click(harry_export_call_sheet_ui, inputs=[harry_title, harry_table, harry_plan], outputs=harry_export_btn)
             harry_reset_btn.click(
@@ -1825,7 +2028,29 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
 
 
 if __name__ == "__main__":
-        # ----------------------------------------------------------------- Harry
+        # ----------------------------------------------------- ChatGPT handoff
+    draft_write_btn.click(
+        draft_prompt_ui,
+        inputs=[draft_type, draft_subject, draft_description, draft_era,
+                draft_continuity, draft_palette, draft_lighting, draft_mood],
+        outputs=[draft_prompt_out, draft_prompt_status],
+    )
+    draft_attach_btn.click(
+        attach_draft_ui,
+        inputs=[draft_entry_id, draft_type, draft_file, draft_description,
+                draft_beat, draft_prompt_out],
+        outputs=[draft_attach_status, draft_preview, build_rail],
+    )
+
+    # ------------------------------------------------------- the GPU machine
+    gpu_refresh_btn.click(gpu_status_html, outputs=gpu_status)
+    video_save_btn.click(
+        save_video_workflows,
+        inputs=[ltx_workflow, minimax_workflow, runway_workflow],
+        outputs=video_save_status,
+    ).then(gpu_status_html, outputs=gpu_status)
+
+    # ----------------------------------------------------------------- Harry
     # Wired here, at the end, so every component above already exists.
     harry_action_btn.click(
         harry_agent_start,
