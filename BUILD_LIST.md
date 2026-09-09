@@ -291,6 +291,57 @@ The three things that convert this from sound to proven, in order:
 
 ---
 
+## Second machine — what installing on the GPU box found
+
+The app now runs on TheBeast itself, against a loopback ComfyUI. Installing it
+there was worth more than the convenience: a second machine is a second
+observer, and it caught two defects the first machine was hiding.
+
+**The UI had never launched under Gradio 6 — on either machine.**
+
+An `if __name__ == "__main__":` block had been dropped into the middle of the
+`gr.Blocks` context, orphaning every handler after it — the ChatGPT handoff, the
+GPU-machine panel, and all of Harry's wiring — outside the context manager.
+Importing `app.py` raised before a server started. Separately, Gradio 6 moved
+`theme` and `css` off the constructor onto `launch()`; left where they were they
+warn and are silently discarded, costing the app its entire visual identity
+while appearing to start fine.
+
+Both are invisible to all eight offline suites for the same reason: **not one of
+them launches the interface.** `test_app_smoke` imports and inspects, which is
+why "app builds + wiring: 0 failures" coexisted with a UI that could not start.
+
+**A stale config outlived the workflow it was written for.**
+
+`kontext_workflow.py --write` exported a Kontext graph but left
+`reference_conditioning` on an `ipadapter` value carried over from an earlier
+setup. Against a Kontext graph there is no adapter node to attach to, so the
+reference went nowhere and the render still succeeded — the picture-of-a-stranger
+failure again, arriving by a new route. `--write` now commits the app to Kontext
+and says so when it changes the setting.
+
+`smoke_app_render.py` caught this one unaided, which is the first evidence that
+the test earns its keep rather than merely passing.
+
+**Install notes, for the next machine:**
+
+- `smoke_out/` and `toolchain_config.json` are gitignored, so reference assets
+  and config never travel with a clone — both must be placed by hand.
+- PowerShell 5.1's `-Encoding utf8` writes a **BOM**. Python's config loader
+  chokes on it and falls back to defaults, so a hand-edited config silently
+  reverts to mock mode. Write JSON with Python, or `utf8NoBOM`.
+- Quotes are eaten when a `python -c` one-liner crosses the remoting layer.
+  Write a script file to the box instead.
+- Gradio binds `127.0.0.1`; on a headless box set `GRADIO_SERVER_NAME=0.0.0.0`
+  and open the port. A firewall block looks exactly like a service that didn't
+  start — the same lesson 8188 taught.
+- `Start-Process` over WinRM dies with the session. The app runs as scheduled
+  task `DDCApp` (SYSTEM, at-startup), alongside `ComfyBoot`.
+- `ANTHROPIC_API_KEY` is machine-scoped on TheBeast, so a SYSTEM task inherits
+  it. **Harry can run there — he cannot on the laptop.**
+
+---
+
 ## First contact with a live GPU — what it found
 
 Run against a real ComfyUI on the 4090, via the `probe_*` / `verify_*` scripts.
