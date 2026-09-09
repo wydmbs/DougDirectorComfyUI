@@ -909,6 +909,27 @@ def harry_rail_html():
     )
 
 
+def _build_visual_critic():
+    """Harry's eyes, such as they are.
+
+    The critic is local -- DINOv2 identity against the entry's own reference,
+    no API key and no per-image cost -- which is the only reason it can be on
+    by default. Import failures must not take the agent down with them: a
+    Harry who cannot measure is worse than one who can, but a Harry who will
+    not start is worse than both. Returning None puts the locking tools back
+    on their honest "nobody looked at this" path rather than pretending.
+    """
+    if not CFG.agent.critique_enabled:
+        return None
+    try:
+        import visual_critic
+    except Exception as error:  # noqa: BLE001
+        print("[harry] visual critic unavailable, locks will be marked "
+              f"unreviewed: {type(error).__name__}: {error}")
+        return None
+    return visual_critic.critique
+
+
 def harry_agent_start(goal, posture, max_steps, provider_name):
     global HARRY_RUNNER
     from harry_agent import AgentRunner, build_registry
@@ -928,7 +949,7 @@ def harry_agent_start(goal, posture, max_steps, provider_name):
         return (harry_rail_html(), harry_ui.feed([]),
                 reward_card(f"⚠️ {error}"), "")
 
-    registry = build_registry(CFG)
+    registry = build_registry(CFG, critique_fn=_build_visual_critic())
     HARRY_RUNNER = AgentRunner(CFG, provider, registry, posture=posture,
                                audit_path="harry_agent_audit.sqlite3",
                                max_steps=int(max_steps or CFG.agent.max_steps))

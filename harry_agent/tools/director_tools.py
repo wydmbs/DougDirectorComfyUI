@@ -140,15 +140,22 @@ def build_tools(cfg, generate_fn=None, critique_fn=None) -> list:
         return critique_fn(cfg, entry_id, image_paths, criteria)
 
     def _blind_lock_note(note: str) -> str:
-        """Mark a lock made without anyone seeing the image.
+        """Say on the row what kind of review, if any, stood behind the lock.
 
-        Harry has no vision today: he receives paths, not pictures. Recording
-        that on the row is the difference between a decision and a guess that
-        looks like one six weeks from now.
+        Harry receives paths, not pictures. Recording that on the row is the
+        difference between a decision and a guess that looks like one six weeks
+        from now. There are three honest answers, not two: nobody looked, a
+        metric measured it, or something actually saw it. A metric critic
+        checks identity against a reference and says nothing about composition
+        or whether the shot is any good, so collapsing it into "reviewed" would
+        overstate it in exactly the way this marker exists to prevent.
         """
-        if critique_fn is not None:
+        if critique_fn is None:
+            marker = "unreviewed: no visual critic was configured, image not seen"
+        elif getattr(critique_fn, "review_kind", None) == "metric":
+            marker = "metric-reviewed: identity measured against the reference, not seen"
+        else:
             return note
-        marker = "unreviewed: no visual critic was configured, image not seen"
         return f"{note} [{marker}]" if note else f"[{marker}]"
 
     # ------------------------------------------------------------- locking
