@@ -1,5 +1,9 @@
 # Production data — not tool code
 toolchain_config.json
+toolchain_config.json.bak
+
+# Run artefacts from the probe/verify scripts
+*.log
 storyboard.xlsx
 images/
 *.pyc

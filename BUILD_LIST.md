@@ -85,10 +85,14 @@ side database: `keyframe_path`, `clip_path`, `motion_prompt`, `video_model`,
    atomic replace, rolling backups. Measured: 8 threads × 6 writes lands 48/48
    with the guard, **5/48 with 42 errors without it**.
 4. **[done] Offline test harness** — mock provider + mock ComfyUI, four suites.
-5. **[next] One real ComfyUI generation, end to end.** Still the highest-value
-   unproven step. `comfy_client.py` is real and complete; what's missing is an
-   API-format workflow to feed it. Until this exists, everything downstream is
-   theory.
+5. **[done] One real ComfyUI generation, end to end.** Was the highest-value
+   unproven step, and it is now proven *through the app* rather than through a
+   probe script: `tests/smoke_app_render.py` drives `director_engine.generate()`
+   — the same function the Build buttons and Harry's tools call — against the
+   4090, and gets a 1024×1024 render back with the reference honoured. The
+   missing piece was never `comfy_client.py`; it was an API-format workflow to
+   feed it, which `kontext_workflow.py --write` now exports and wires into
+   config in one command.
 
 ---
 
@@ -221,8 +225,12 @@ production, not just Harry's work.
 | `test_review_fixes` | 32 checks, 10 scenarios | 0 failures |
 | `test_doctor` | 18 checks, 7 machine states | 0 failures |
 | `test_app_smoke` | app builds + wiring | 0 failures |
+| `smoke_app_render` | **live GPU** — app renders, reference honoured | pass |
 
-Run: `python tests\test_doctor.py` (each is standalone).
+Run: `python tests\test_doctor.py` (each is standalone). `smoke_app_render.py`
+is the exception: it needs a live ComfyUI and about a minute of GPU time, which
+is the point of it — it is the only test that can fail because of the network,
+the firewall, or a workflow that no longer matches its node mapping.
 
 `tests\fake_comfy.py` is a stand-in ComfyUI with profiles for the half-configured
 states that matter — `complete`, `no_ipadapter`, `no_model`, `no_flux`. An absent
@@ -265,14 +273,156 @@ Worth recording, because several of these were invisible to a green test suite.
 - No stale-read detection (no compare-and-set on locking).
 - `save_image_node` is configured but not honoured when picking outputs.
 
-**What is *not* verified:** no live LLM call, no live ComfyUI, no FLUX render, no
-Minimax / LTX / Runway clip, no browser session. The handover's open item 1 —
-that no Harry prompt change has been validated against a real model — is still
-true, and now applies to the agent loop and the whole model chain too.
+**What is *not* verified:** no live LLM call, no Minimax / LTX / Runway clip, no
+browser session. The handover's open item 1 — that no Harry prompt change has
+been validated against a real model — is still true, and now applies to the
+agent loop too. Live ComfyUI and a real FLUX render are no longer on this list.
 
 The three things that convert this from sound to proven, in order:
-1. **One real FLUX keyframe with IP-Adapter holding a face**, driven from this
-   app against the GPU machine. This proves the upload path *and* the continuity
-   claim in one go.
+1. ~~One real FLUX keyframe~~ — **[done]**. `tests/smoke_app_render.py` renders
+   through the app against the GPU machine with the reference honoured, which
+   proves the upload path. Note what it does *not* prove: the test can show the
+   reference arrived, not that the picture is the right character. Continuity is
+   evidenced separately by the verification sheets below.
 2. One real clip from each of the three video routes.
-3. A real Harry run on the corrected poem.
+3. A real Harry run on the corrected poem. Blocked on a model key —
+   `doctor.py` reports `ANTHROPIC_API_KEY` unset, so Harry cannot run. Rendering
+   is unaffected.
+
+---
+
+## First contact with a live GPU — what it found
+
+Run against a real ComfyUI on the 4090, via the `probe_*` / `verify_*` scripts.
+None of this was visible to a green suite: every defect below sat downstream of
+a passing test, in the pixels.
+
+**Conditioning holds appearance. It does not hold anatomy.**
+
+The character's wings had no defined limb end, so any shot needing one — at a
+table, holding a prop — got a human hand. `verify_wing_design.py` separated the
+redraw from the conditioning across two shots and five configs:
+
+| Config | at a table | holding a spoon |
+|---|---|---|
+| v1 control | human hands | human hand |
+| v2 alone | clawed talons | human hand |
+| v2 + turnaround sheet | clawed talons | human hand |
+| v2 + wing-tip study | **folded wing** | hand in a dark glove |
+| v2 + both | **folded wing** | hand in a dark glove |
+
+Three things fall out of that table, and only the first was expected:
+
+1. **The redraw alone did not fix it.** v2 removed the human hands and the model
+   substituted the next-nearest thing it knew — bird claws. Fixing the design on
+   paper fixed nothing in the shots.
+2. **The turnaround sheet is inert here.** It shows the wing at rest from four
+   angles, which is not what a shot needing a limb end is missing. The wing-tip
+   study — the same wing *doing things* — is what moved it.
+3. **Under load the study transferred colour and material but not structure.**
+   The glove is a five-fingered hand wearing the study's dark feather tone. That
+   is a worse failure than the pink hand it replaced: it reads as a costume
+   choice and would ship.
+
+The general form, which is the part worth keeping: **a reference cannot supply
+an affordance the design never defined.** Told only what to avoid, the model
+substitutes the nearest thing it knows and dresses it in whatever the reference
+provided. More conditioning improves the disguise, not the anatomy.
+
+`probe_grip.py` tested whether *any* study can carry a grip, since the answer
+decides whether the registry work below is worth doing. Four candidate studies,
+each naming a different mechanism — grip with the primaries, curl the feathers
+around the shaft, cradle the rod against the wing's underside, pinch it between
+two feather layers — every one of them ending in "no fingers and no hand", and
+each rendered twice: the study itself, then that study chained into the failing
+shot alongside the tips plate.
+
+**0 of 4 worked, in both rows.** Every study *and* every shot produced the same
+five-fingered gloved hand, thumb opposed, fingers wrapped. The "feather curl"
+result is the clearest statement of the problem: the glove picked up feather
+texture and kept the thumb. And `cradle` — which asked for the rod tucked under
+the wing and needed no grip at all — produced a grip anyway.
+
+So the explicit negative is on the record: **the instruction was ignored in
+every case, and more conditioning never once changed the anatomy.** Kontext
+edits attributes; a grip is not an attribute, it is a structure the design does
+not have. The model is not failing to follow the reference — it is filling a
+hole the reference never filled, and it fills it the same way every time.
+
+**[resolved — not building] Reference vs. study.** The registry has one notion
+of a character image, and the two-kinds distinction looked worth plumbing when
+the tips study fixed the table shot. It is not. A study is load-bearing only for
+a limb end *at rest*, which is the case that already works; for the case that
+fails it changes nothing. Auto-chaining studies would add a column, a lookup and
+a conditioning branch to buy back a shot type that already passes. Revisit only
+if a design change makes studies carry structure.
+
+**The answer belongs in the character design, and the model has already voted.**
+Across nine renders under four different instructions the model converged on the
+same solution with no prompting for it: a glove. That is also the solution
+animation has used for eighty years, and for the same reason — an animal hand
+that has to act reads badly, so you put a glove on it and stop drawing the
+problem. Three ways forward, in descending order of cost:
+
+| | Option | Cost |
+|---|---|---|
+| **A** | **Make the glove canon.** Add it to the design bible and the reference sheet as a deliberate costume choice. | One asset. The model already does this unprompted and consistently, so it holds across shots with *no* conditioning spend. |
+| B | Draw an explicit four-finger wing-hand on the turnaround. | New ChatGPT turnaround, invalidates references downstream, and still needs verifying under load. |
+| C | Forbid grip in shot design — he never holds anything. | Free, but it constrains every scene from here on. |
+
+**A is the recommendation.** The evidence is that fighting this costs something
+on every shot forever and has so far won nothing; adopting it costs one asset
+and comes with the model's own consistency for free.
+
+### [done] Method proven on a stand-in — the glove case
+
+**The character is not settled. This rooster is a stand-in, and the glove is not
+a design decision — it is a worked example.** Recorded that way on purpose: the
+transferable result is the method and the three findings below, not the costume.
+When the real character exists, the spec here is disposable and the method is
+what gets re-run against it.
+
+`make_glove_canon.py` produced a v3 set and `verify_glove_canon.py` tested it.
+Both are repeatable and parameterised by filename, so they apply to whatever
+character replaces this one.
+
+**What transfers, and is worth keeping regardless of the character:**
+
+1. **Kontext edits attributes, not structures.** A grip is a structure — four
+   studies, zero wins. A glove is an attribute — one repair, held across every
+   shot. This predicts in advance which design problems conditioning can solve
+   and which have to be drawn.
+2. **No redraw needed for an attribute.** The v3 assets are Kontext repairs of
+   their v2 counterparts. This matters beyond cost: a redraw invalidates every
+   reference downstream of the current sheet, and a repair does not.
+3. **A defined design needs one reference, not three.** `v3 alone` matched
+   `v3 + plate` and `v3 + both`. Once the design answers the question, chaining
+   studies buys nothing.
+
+**What does not transfer:** the glove spec itself, the claw-tip drift, and the
+specific v3 files. All provisional until the real character anchor exists.
+
+The verification shape is the reusable part — three shots × four configs, with
+one shot (`pointing`) appearing in no asset so the test measures whether a
+design generalises rather than whether plates memorised poses. On the stand-in:
+
+| Claim | v2 + tips | v3 |
+|---|---|---|
+| **one limb end** | feathered wing at rest, glove under load — *two answers* | consistent in all three shots |
+| **same appearance** | re-improvised per render | stable across all nine tiles |
+| **no bare hand** | passes | passes |
+
+This also retires the reference-vs-study question. Studies were only ever needed
+to patch a limb end the design left undefined; with the design defined, there is
+nothing for a study to carry.
+
+**[done] Infrastructure, found the hard way.** ComfyUI on the GPU box was
+unreachable from the laptop — port 8188 was firewall-blocked, which reads
+exactly like the service being down. And `Start-Process` over WinRM dies with
+the session, so restarts appeared to succeed and left nothing running. It is now
+a SYSTEM scheduled task (`ComfyBoot`) that survives logoff and reboot.
+
+**A crashed run is not a lost run.** The box rebooted mid-verification, but the
+renders were already on disk on the GPU machine. `compose_salvage.py` rebuilds
+the comparison sheet from files, so a partial pass is read like a clean one
+without re-spending GPU time.
