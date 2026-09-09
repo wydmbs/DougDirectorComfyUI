@@ -191,7 +191,7 @@ def scenario_instruction_shape():
     from reference_conditioning import review_instruction
     cfg = cfgmod.ToolchainConfig()
 
-    clean = review_instruction("Turn him to a three-quarter view facing left.", cfg)
+    clean = review_instruction("Move the camera to a close-up of his head and shoulders.", cfg)
     check(clean == "", f"a surgical instruction passes without comment ({clean!r})")
 
     # The exact prompt that turned a waistcoat into a lapelled jacket.
@@ -216,6 +216,23 @@ def scenario_instruction_shape():
     off.agent.reference_conditioning = "ipadapter"
     check(review_instruction("A rooster in a crimson waistcoat, dramatic light.", off) == "",
           "IP-Adapter prompts are left alone -- they want a description")
+
+    # Twelve renders across three guidance values and four phrasings all came
+    # back at the same angle. Asking for one is a wasted render, so say so
+    # before it is spent rather than after.
+    rotate = review_instruction("Show him in full side profile, facing left.", cfg)
+    check("barely" in rotate and "rotates" in rotate,
+          "a request to rotate the character is flagged as one Kontext will not honour")
+    check("chain the turnaround" in rotate,
+          "and the working alternative is named rather than just refused")
+
+    # Reframing is the half it is good at, and must not be swept up in the same
+    # warning -- "profile" appearing inside a framing instruction is not a
+    # request to rotate the body.
+    reframe = review_instruction(
+        "Zoom to a close-up of his head in three-quarter profile.", cfg)
+    check("barely" not in reframe,
+          "a framing instruction is not mistaken for a rotation request")
 
 
 def scenario_multi_reference():

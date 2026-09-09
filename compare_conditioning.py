@@ -72,10 +72,16 @@ def render(url, wf, label, timeout=900):
     raise RuntimeError(f"{label}: timeout")
 
 
-def sheet(tiles, out_path, cell=560):
+def sheet(tiles, out_path, cell=560, columns=None):
+    """Lay tiles out in a grid, captioned.
+
+    Callers that are comparing one variable against another want the grid to
+    match the experiment -- a row per phrasing, a column per setting -- so the
+    comparison reads down and across. Left alone it wraps at three.
+    """
     from PIL import Image, ImageDraw
     band = 44
-    cols = min(len(tiles), 3)
+    cols = min(len(tiles), columns or 3)
     rows = (len(tiles) + cols - 1) // cols
     img = Image.new("RGB", (cols * cell, rows * (cell + band)), "white")
     d = ImageDraw.Draw(img)

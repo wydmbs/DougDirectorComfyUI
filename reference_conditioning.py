@@ -366,6 +366,29 @@ INSTRUCTION_VERBS = (
     "zoom", "pan", "crop", "reframe", "show", "have", "give", "point",
     "look", "face", "lean", "step", "walk", "sit", "stand", "hold",
 )
+# Kontext will reframe all day and barely rotate at all. Swept on this
+# project's own reference at guidance 2.5, 4.0 and 6.0, across four ways of
+# asking -- an order to the subject, a camera move, the finished pose stated as
+# fact, and a deliberately excessive "full side profile" -- twelve renders came
+# back at essentially the same angle. Guidance changed the contrast and the
+# background tone and left the geometry alone.
+#
+# That is the model working as designed: it preserves layout, which is the same
+# property that keeps the costume. A single front-on reference contains no side
+# of the character to rotate towards, so there is nothing to preserve *into*.
+# Chaining a turnaround that already holds that angle helps a little; staging
+# the angle in the reference itself is what actually works.
+POSE_TERMS = (
+    "three-quarter", "three quarter", "profile", "from the side", "from behind",
+    "side view", "back view", "rear view", "turn him", "turn her", "turn them",
+    "facing left", "facing right", "facing away", "over the shoulder",
+)
+# Reframing is the half Kontext is good at, so a prompt doing both should not be
+# warned off wholesale.
+FRAMING_TERMS = (
+    "close-up", "close up", "wide shot", "zoom", "crop", "reframe",
+    "head and shoulders", "full body", "medium shot",
+)
 
 
 def review_instruction(prompt: str, cfg) -> str:
@@ -401,5 +424,12 @@ def review_instruction(prompt: str, cfg) -> str:
         notes.append(
             f"mentions {', '.join(named[:5])} -- Kontext inherits anything the prompt leaves "
             "out, so naming an attribute lets it be regenerated rather than kept")
+
+    pose = sorted({term for term in POSE_TERMS if term in lowered})
+    if pose and not any(term in lowered for term in FRAMING_TERMS):
+        notes.append(
+            f"asks for a change of angle ({pose[0]}) -- Kontext reframes well but barely "
+            "rotates, and pushing guidance does not help; supply a reference that already "
+            "holds that angle, or chain the turnaround sheet alongside it")
 
     return " | ".join(notes)
