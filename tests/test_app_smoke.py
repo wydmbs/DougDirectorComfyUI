@@ -1,13 +1,21 @@
-"""Does the app actually build with Harry wired in?
+"""Does the app actually build *and serve* with Harry wired in?
 
-Imports app.py with launch() stubbed out, which constructs every Gradio
-component and every event binding. A typo in the wiring, a missing component,
-or a mismatched output list all fail here rather than in front of the director.
+Imports app.py, which constructs every Gradio component and every event
+binding. A typo in the wiring, a missing component, or a mismatched output list
+all fail here rather than in front of the director.
+
+Importing alone is not enough, and this suite learned that the hard way. An
+`if __name__ == "__main__":` block once sat in the middle of the Blocks context
+with the handler wiring inside it. On import that block is skipped, so nothing
+raised and this test passed for weeks against a UI that could not start at all.
+The only honest check is to launch the server and fetch a page, which is what
+`serves()` below does.
 """
 
 import os
 import sys
 import tempfile
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -19,11 +27,62 @@ os.chdir(WORK)
 
 import gradio as gr
 
-_launched = {}
-_real_launch = gr.Blocks.launch
-gr.Blocks.launch = lambda self, *a, **k: _launched.setdefault("ok", True)
-
 failures = []
+
+# Importing the app must not start a server. It used to: `demo.launch()` sat at
+# module level, so an import blocked forever. Stubbing launch across the import
+# turns that regression into a failed check instead of a test run that hangs.
+_launched_on_import = {}
+_real_launch = gr.Blocks.launch
+gr.Blocks.launch = lambda self, *a, **k: _launched_on_import.setdefault("yes", True)
+
+
+def _free_port():
+    import socket
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def serves():
+    """Launch the real server, fetch the page, shut it down.
+
+    Reproduces what `python app.py` does. Anything that only breaks at launch
+    -- wiring outside the Blocks context, a constructor argument the installed
+    Gradio has moved -- surfaces here.
+    """
+    port = _free_port()
+    try:
+        app.demo.launch(
+            server_name="127.0.0.1",
+            server_port=port,
+            prevent_thread_lock=True,
+            share=False,
+            show_error=True,
+            quiet=True,
+            theme=getattr(app, "THEME", None),
+            css=getattr(app, "CUSTOM_CSS", None),
+        )
+    except Exception as error:  # noqa: BLE001
+        return False, f"launch() raised: {type(error).__name__}: {error}"
+
+    try:
+        url = f"http://127.0.0.1:{app.demo.server_port}/"
+        with urllib.request.urlopen(url, timeout=30) as response:
+            body = response.read()
+        if response.status != 200:
+            return False, f"served HTTP {response.status}"
+        if len(body) < 1000:
+            return False, f"served only {len(body)} bytes"
+        return True, f"served HTTP 200, {len(body):,} bytes"
+    except Exception as error:  # noqa: BLE001
+        return False, f"launched but did not serve: {type(error).__name__}: {error}"
+    finally:
+        try:
+            app.demo.close()
+        except Exception:  # noqa: BLE001
+            pass
+
 try:
     sys.path.insert(0, ROOT)
     import app  # noqa: F401  -- importing is the test
@@ -32,6 +91,8 @@ except Exception as error:  # noqa: BLE001
     import traceback
     failures.append(f"app.py failed to build: {type(error).__name__}: {error}")
     traceback.print_exc()
+finally:
+    gr.Blocks.launch = _real_launch
 
 if not failures:
     checks = [
@@ -41,7 +102,8 @@ if not failures:
         ("harry_agent_stop", callable(getattr(app, "harry_agent_stop", None))),
         ("director_engine imported", getattr(app, "engine", None) is not None),
         ("harry_ui imported", getattr(app, "harry_ui", None) is not None),
-        ("launch() was reached", _launched.get("ok") is True),
+        ("importing does not start a server",
+         _launched_on_import.get("yes") is not True),
     ]
     for label, ok in checks:
         print(f"  {'PASS' if ok else 'FAIL'}  {label}")
@@ -113,7 +175,12 @@ if not failures:
         print(f"  FAIL  setup_save raised: {error}")
         failures.append("setup_save raised")
 
-gr.Blocks.launch = _real_launch
+    # Last, because it binds a port: does it actually serve?
+    ok, detail = serves()
+    print(f"  {'PASS' if ok else 'FAIL'}  the interface launches and serves -- {detail}")
+    if not ok:
+        failures.append("interface does not serve")
+
 print(f"\nfailures: {len(failures)}")
 for failure in failures:
     print("   ", failure)

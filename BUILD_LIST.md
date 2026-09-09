@@ -224,7 +224,7 @@ production, not just Harry's work.
 | `test_remote_gpu` | 40 checks, 6 scenarios | 0 failures |
 | `test_review_fixes` | 32 checks, 10 scenarios | 0 failures |
 | `test_doctor` | 18 checks, 7 machine states | 0 failures |
-| `test_app_smoke` | app builds + wiring | 0 failures |
+| `test_app_smoke` | app builds, **launches and serves** | 0 failures |
 | `smoke_app_render` | **live GPU** — app renders, reference honoured | pass |
 
 Run: `python tests\test_doctor.py` (each is standalone). `smoke_app_render.py`
@@ -310,6 +310,23 @@ while appearing to start fine.
 Both are invisible to all eight offline suites for the same reason: **not one of
 them launches the interface.** `test_app_smoke` imports and inspects, which is
 why "app builds + wiring: 0 failures" coexisted with a UI that could not start.
+
+The mechanism is worth stating exactly, because it is the sharpest example so
+far of a test measuring the wrong thing. On **import**, `if __name__` is false,
+so the orphaned block is skipped and nothing raises. `demo.launch()` sat *below*
+it at module level, where the test's stub caught it — so the assertion
+`launch() was reached` passed. On **`python app.py`** the block executes and
+raises. The suite only ever exercised the path on which the bug is invisible,
+and its one launch-related check was a stub that could never have observed a
+real failure.
+
+`test_app_smoke` now **launches the server on a free port, fetches a page, and
+closes it** — and separately asserts that *importing* the app does not start a
+server, which is both the regression that caused the original hang and the check
+that actually catches this bug. Verified by reverting `app.py` and re-running:
+`RESULT: FAIL`. Note that serving alone was not sufficient — the broken build
+still served, 1,988,573 bytes against 2,038,198, quietly missing every handler
+in the orphaned block.
 
 **A stale config outlived the workflow it was written for.**
 
