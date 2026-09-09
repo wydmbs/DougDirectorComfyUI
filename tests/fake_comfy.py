@@ -23,6 +23,7 @@ BASE_NODES = {
     "CLIPTextEncode": {"input": {"required": {"text": ["STRING"]}}},
     "KSampler": {"input": {"required": {"seed": ["INT"]}}},
     "VAEEncode": {"input": {"required": {}}},
+    "VAEDecode": {"input": {"required": {}}},
     "LoadImage": {"input": {"required": {"image": [["example.png"]]}}},
     "SaveImage": {"input": {"required": {}}},
     "EmptyLatentImage": {"input": {"required": {}}},
@@ -54,18 +55,54 @@ VIDEO_NODES = {
     "LTXVImgToVideo": {"input": {"required": {"num_frames": ["INT"]}}},
 }
 
+# Kontext is core nodes plus a separate model, and the model is a bare
+# diffusion model rather than an all-in-one checkpoint -- so the text encoders
+# and VAE have to be there too. Each of those is its own way to fail.
+KONTEXT_NODES = {
+    "ReferenceLatent": {"input": {"required": {}}},
+    "FluxKontextImageScale": {"input": {"required": {}}},
+    "ConditioningZeroOut": {"input": {"required": {}}},
+    "FluxGuidance": {"input": {"required": {"guidance": ["FLOAT"]}}},
+    "UNETLoader": {"input": {"required": {
+        "unet_name": [["flux1-dev-kontext_fp8_scaled.safetensors"]]}}},
+    "DualCLIPLoader": {"input": {"required": {
+        "clip_name1": [["clip_l.safetensors", "t5xxl_fp8_e4m3fn.safetensors"]]}}},
+    "VAELoader": {"input": {"required": {"vae_name": [["ae.safetensors"]]}}},
+}
+
 PROFILES = {
-    # Everything present, FLUX adapter included: the state to call ready.
-    "complete": {**BASE_NODES, **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES, **VIDEO_NODES},
+    # Everything present, Kontext and FLUX adapter included: the state to call
+    # ready.
+    "complete": {**BASE_NODES, **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES,
+                 **KONTEXT_NODES, **VIDEO_NODES},
+    # Kontext nodes and encoders in place, model never downloaded. The core
+    # nodes are present on any current ComfyUI, so this reads as supported
+    # right up until a render asks for a model that isn't there.
+    "no_kontext_model": {
+        **BASE_NODES, **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES, **VIDEO_NODES,
+        **{k: v for k, v in KONTEXT_NODES.items() if k != "UNETLoader"},
+        "UNETLoader": {"input": {"required": {
+            "unet_name": [["flux1-dev.safetensors"]]}}},
+    },
+    # Kontext model downloaded, but it is a bare diffusion model and nothing
+    # else came with it. Fails at load time complaining about a missing file
+    # rather than about Kontext.
+    "kontext_no_encoders": {
+        **BASE_NODES, **IPADAPTER_NODES, **IPADAPTER_FLUX_NODES, **VIDEO_NODES,
+        **KONTEXT_NODES,
+        "DualCLIPLoader": {"input": {"required": {"clip_name1": [[]]}}},
+        "VAELoader": {"input": {"required": {"vae_name": [[]]}}},
+    },
     # ComfyUI up, IP-Adapter never installed. The most common real gap, and the
     # one that silently ruins continuity if it goes unnoticed.
     "no_ipadapter": BASE_NODES,
     # The trap found on the real machine: SD/SDXL adapter present, FLUX one
     # absent. Everything looks installed and FLUX still cannot be conditioned.
-    "sd_only": {**BASE_NODES, **IPADAPTER_NODES, **VIDEO_NODES},
+    # These three carry Kontext so the only variable under test is the adapter.
+    "sd_only": {**BASE_NODES, **IPADAPTER_NODES, **KONTEXT_NODES, **VIDEO_NODES},
     # FLUX node installed but its model file never downloaded.
     "no_flux_adapter_model": {
-        **BASE_NODES, **VIDEO_NODES,
+        **BASE_NODES, **KONTEXT_NODES, **VIDEO_NODES,
         "ApplyIPAdapterFlux": IPADAPTER_FLUX_NODES["ApplyIPAdapterFlux"],
         "IPAdapterFluxLoader": {"input": {"required": {"ipadapter": [[]]}}},
     },
@@ -73,7 +110,7 @@ PROFILES = {
     # node cannot open. Looks completely healthy; fails at render time with an
     # unpickling error that mentions neither the file nor the format.
     "flux_adapter_wrong_format": {
-        **BASE_NODES, **VIDEO_NODES,
+        **BASE_NODES, **KONTEXT_NODES, **VIDEO_NODES,
         "ApplyIPAdapterFlux": IPADAPTER_FLUX_NODES["ApplyIPAdapterFlux"],
         "IPAdapterFluxLoader": {"input": {"required": {"ipadapter": [[
             "instantx_flux1_dev_ip_adapter_bf16.safetensors"]]}}},

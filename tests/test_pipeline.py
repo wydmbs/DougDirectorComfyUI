@@ -58,6 +58,27 @@ def flux_workflow():
     }
 
 
+def kontext_workflow(with_scale=True):
+    workflow = {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": "flux1-dev-kontext_fp8_scaled.safetensors"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": "example.png"}},
+        "6": {"class_type": "VAEEncode",
+              "inputs": {"pixels": ["5" if with_scale else "4", 0], "vae": ["3", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "turn him to face left"}},
+        "9": {"class_type": "ReferenceLatent",
+              "inputs": {"conditioning": ["7", 0], "latent": ["6", 0]}},
+        "11": {"class_type": "KSampler",
+               "inputs": {"model": ["1", 0], "positive": ["9", 0],
+                          "latent_image": ["6", 0], "seed": 1, "denoise": 1.0}},
+        "13": {"class_type": "SaveImage", "inputs": {"images": ["11", 0]}},
+    }
+    if with_scale:
+        workflow["5"] = {"class_type": "FluxKontextImageScale", "inputs": {"image": ["4", 0]}}
+    return workflow
+
+
 def scenario_routing():
     print("\n[1] Shots route to the right model")
     cases = [
@@ -119,6 +140,48 @@ def scenario_ipadapter():
     _, warn_off = apply_reference(flux_workflow(), cfg_off, turnaround)
     check("off" in warn_off.lower(),
           "conditioning switched off is reported honestly")
+
+    shutil.rmtree(workdir, ignore_errors=True)
+
+
+def scenario_kontext():
+    print("\n[2b] Kontext injection reaches the loader through the whole chain")
+    cfg = cfgmod.ToolchainConfig()
+    check(cfg.agent.reference_conditioning == "kontext",
+          "Kontext is the default, since IP-Adapter cannot hold costume detail")
+
+    workdir = tempfile.mkdtemp(prefix="kontext_")
+    reference = os.path.join(workdir, "reference.png")
+    engine._mock_image("ref", "x", 1).save(reference)
+
+    found = inspect_workflow(kontext_workflow())
+    check(found["has_kontext"], "the ReferenceLatent node is detected")
+    check(found["can_lock_identity"], "a Kontext graph can lock identity")
+    check(found["identity_mechanism"] == "kontext", "the mechanism is named correctly")
+    # A Kontext graph encodes its reference through a VAEEncode, which must not
+    # be mistaken for img2img scene anchoring -- that mistake is what makes a
+    # perfectly correct denoise of 1.0 look like a misconfiguration.
+    check(not found["can_anchor_scene"],
+          "its VAEEncode is not mistaken for scene anchoring")
+
+    work, note = apply_reference(kontext_workflow(), cfg, reference)
+    check(note == "", f"the reference applied cleanly (note: {note!r})")
+    check(work["4"]["inputs"]["image"] == os.path.abspath(reference),
+          "the filename landed on the LoadImage three nodes upstream of ReferenceLatent")
+
+    # Without the scaler the render still runs, so this has to be a note rather
+    # than a refusal -- but a silent one would leave quality loss unexplained.
+    no_scale = kontext_workflow(with_scale=False)
+    _, scale_note = apply_reference(no_scale, cfg, reference)
+    check("FluxKontextImageScale" in scale_note,
+          "a missing resolution scaler is mentioned, not silently tolerated")
+    check(no_scale["4"]["inputs"]["image"] == os.path.abspath(reference),
+          "and the reference is still applied")
+
+    bare = {"1": {"class_type": "KSampler", "inputs": {"seed": 1}}}
+    _, warn = apply_reference(bare, cfg, reference)
+    check("ReferenceLatent" in warn,
+          "a workflow with no Kontext chain says so rather than pretending")
 
     shutil.rmtree(workdir, ignore_errors=True)
 
@@ -262,6 +325,7 @@ def main():
         cfg = make_cfg(workdir)
         scenario_routing()
         scenario_ipadapter()
+        scenario_kontext()
         scenario_stages(cfg)
         scenario_registry_columns(cfg)
         scenario_migration()

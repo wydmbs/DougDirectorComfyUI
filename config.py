@@ -66,10 +66,20 @@ class AgentConfig:
     variants_per_generation: int = 4
     critique_enabled: bool = True
     max_iterations_per_asset: int = 3
-    # FLUX.1 Dev + IP-Adapter is the chosen keyframe path, so identity locking
-    # is on by default: without it every character quietly drifts between shots.
-    reference_conditioning: str = "ipadapter"
-    ipadapter_weight: float = 0.8
+    # Kontext is the default because it is a different mechanism, not a better
+    # setting. It encodes the reference into the sequence the model denoises, so
+    # the character arrives intact; IP-Adapter hands the model a summary of the
+    # reference and loses costume detail no weight can recover. Measured on the
+    # Pig & Rooster reference: Kontext held the comb, wattle and eye; IP-Adapter
+    # substituted a generic rooster comb at both 1.0 and 1.3.
+    reference_conditioning: str = "kontext"
+    # Kontext expects low guidance -- it is transforming an image it can see,
+    # not inventing one from a description.
+    kontext_guidance: float = 2.5
+    # Kept for the fallback path. The node's own default is 1.0; anything below
+    # that is weaker than the adapter's baseline, which is a strange place to
+    # start when the complaint is that identity drifts.
+    ipadapter_weight: float = 1.0
 
 
 @dataclass

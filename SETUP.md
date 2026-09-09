@@ -48,11 +48,23 @@ Restart ComfyUI afterwards; it only scans custom nodes at startup.
 
 | What | Where it goes |
 |---|---|
+| FLUX.1 Kontext Dev, FP8 | `ComfyUI/models/diffusion_models` |
+| `clip_l` + `t5xxl` text encoders | `ComfyUI/models/clip` |
+| FLUX `ae.safetensors` VAE | `ComfyUI/models/vae` |
 | FLUX.1 Dev, FP8 | `ComfyUI/models/checkpoints` (or `models/unet`) |
 | IP-Adapter Plus | `ComfyUI/models/ipadapter` |
 | CLIP-ViT-H vision | `ComfyUI/models/clip_vision` |
 
 FP8 is the variant to use on a 4090 — around 12–16GB, which leaves room to work.
+
+Kontext is a **separate model**, not a setting on FLUX.1 Dev, and it ships as a
+bare diffusion model — so the text encoders and VAE that an all-in-one checkpoint
+bundles have to be present on their own. Get it from
+`Comfy-Org/flux1-kontext-dev_ComfyUI` (`flux1-dev-kontext_fp8_scaled.safetensors`,
+11GB, no gate, no token needed).
+
+The last three rows are only needed for the IP-Adapter fallback. If you are
+starting fresh and only want the recommended path, skip them.
 
 **If ComfyUI is on a different machine from the app**, start it so it accepts
 connections from elsewhere:
@@ -72,7 +84,67 @@ Models as fine.
 
 ## 3. Build the keyframe workflow
 
-Build this in ComfyUI's own UI, once. The harness drives it afterwards.
+You don't have to draw this by hand. With ComfyUI running:
+
+```powershell
+python kontext_workflow.py --write        # recommended
+python flux_workflow_builder.py --write   # IP-Adapter fallback
+```
+
+Both read the live server's node list, so every filename they write is one this
+machine actually has, and `--write` points the app's config at the result. What
+follows is what they build, and why it is shaped that way.
+
+### How a character survives from shot to shot
+
+This is the single decision that makes or breaks continuity, and it is a choice
+between two **different mechanisms** rather than two quality settings:
+
+| | What reaches the model | Holds |
+|---|---|---|
+| **Kontext** | the reference, VAE-encoded into a full latent grid, concatenated onto the sequence being denoised | costume detail, button count, the exact shape of a comb |
+| **IP-Adapter** | a handful of embedding tokens from a vision encoder — a *summary* of the reference | "roughly this character" |
+
+IP-Adapter cannot hold what it never received. Turning its weight up makes the
+picture more contrasty, not more faithful; measured on the Pig & Rooster
+reference, weight 1.0 and 1.3 both replaced a distinctive floppy two-lobed comb
+with a generic serrated one. Kontext kept it. That is the whole reason Kontext
+is the default.
+
+### The Kontext graph
+
+```
+UNETLoader (kontext) ─────────────────────────────> KSampler ──> VAEDecode ──> SaveImage
+                                                      ▲  ▲
+LoadImage ──> FluxKontextImageScale ──> VAEEncode ────┴──┤
+                                            │            │
+CLIPTextEncode (instruction) ──> FluxGuidance ──> ReferenceLatent
+                             └─> ConditioningZeroOut ────────> (negative)
+```
+
+What matters, and why:
+
+- **`ReferenceLatent` is the node doing the work.** It attaches the encoded
+  reference to the conditioning, so the reference's tokens travel alongside the
+  ones being generated. It is core ComfyUI, not a custom node — if it is absent,
+  update ComfyUI.
+- **`FluxKontextImageScale` is not optional in practice.** Kontext was trained on
+  a fixed set of resolutions; anything else degrades in a way that reads as the
+  model being bad rather than the image being the wrong shape.
+- **The sampler starts from the reference's own latent.** That is what makes this
+  an edit of that image rather than a new picture that resembles it.
+- **`denoise` stays at 1.0 here.** The 0.5–0.7 rule below belongs to img2img,
+  which is a different thing.
+- **Guidance is low, around 2.5.** Kontext is transforming an image it can see,
+  not inventing one from a description.
+
+**Write instructions, not descriptions.** Kontext is an edit model. "Turn him to
+face left" transforms the reference; re-describing the character makes it redraw
+from scratch and you lose the thing you were trying to keep. Anything you don't
+mention is inherited, which is the point — so mentioning the wardrobe or the
+lighting is how they drift.
+
+### The IP-Adapter graph, if you use the fallback
 
 ```
 CheckpointLoaderSimple ──┐
@@ -101,6 +173,11 @@ What matters, and why:
   1.0 the sampler throws the encoded scene away entirely — the reference is in
   the graph and absent from the result, which looks exactly like conditioning not
   working. The doctor flags this.
+- **On FLUX, use `ApplyIPAdapterFlux`, not the SD/SDXL nodes.** They are separate
+  implementations and the SD one cannot condition FLUX at all. The FLUX adapter
+  also loads its weights with a bare `torch.load`, so it needs `ip-adapter.bin`
+  — the safetensors build of the same weights appears in the dropdown and fails
+  at render time with an unpickling error naming neither file nor format.
 
 Then export it:
 
@@ -134,28 +211,35 @@ In **Setup**:
 ## 5. Draft, stage, and check the face
 
 **Draft it.** Harry's tab → *Draft it in ChatGPT*. Describe the character, copy
-the prompt, paste it into ChatGPT, save the sheet you like, attach it back. The
-prompt asks for a plain grey background and flat studio lighting deliberately —
-IP-Adapter reads a busy background as part of the character, so a scenic
-turnaround poisons every render downstream.
+the prompt, paste it into ChatGPT, save the image you like, attach it back. Ask
+for the **reference** prompt, not the turnaround: one character, one view, plain
+grey background, flat studio lighting. A busy background or dramatic lighting is
+inherited along with the character, so a scenic reference poisons every render
+downstream. Keep the four-view turnaround too — Minimax H3 genuinely wants it
+later — but it is the wrong shape for conditioning a still.
 
 **Stage a keyframe.** Build tab → name a shot, write a cinematic prompt, and
 generate with the character selected as the identity reference.
 
 **Then do the check that actually matters.** Put the generated keyframe next to
-the ChatGPT turnaround and ask: *is this the same character?* Not "is it good" —
-is it the **same**. If yes, the whole chain works and you can build on it. If
-not, in likely order:
+the reference and ask: *is this the same character?* Not "is it good" — is it the
+**same**. Pick one small, distinctive feature and check that specifically; a
+comb, a button count, a collar. Broad impressions are too forgiving. If it isn't
+the same, in likely order:
 
 | Symptom | Cause |
 |---|---|
-| Face unrelated to the sheet | IP-Adapter not wired to the sampler, or weight too low |
-| Background ignored | `denoise` at 1.0 |
+| Recognisable but details all slightly wrong | Conditioning is on IP-Adapter. Switch to Kontext — no weight fixes this |
+| Character redrawn rather than transformed | The Kontext prompt describes the scene instead of instructing an edit |
+| Wardrobe or lighting changed on its own | The instruction mentioned them. Anything named gets regenerated |
+| Face unrelated to the reference | The reference never reached the graph — check the doctor's *Keyframe workflow* section |
+| Softer than expected | No `FluxKontextImageScale`, so Kontext got an untrained resolution |
+| Background ignored (img2img) | `denoise` at 1.0 |
 | ComfyUI rejects the prompt | Node mapping stale, or a missing custom node |
-| Everything drifts subtly | Turnaround sheet has a busy background or dramatic lighting |
 
-Raise `ipadapter_weight` (Setup, default 0.8) toward 1.0 if identity is loose;
-drop it if the pose is too rigidly copied.
+On the fallback path only: raise `ipadapter_weight` (Setup, default 1.0 — the
+node's own baseline) if identity is loose, drop it if the pose is too rigidly
+copied. Do not expect much; the ceiling is low by construction.
 
 ---
 

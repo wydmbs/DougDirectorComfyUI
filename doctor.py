@@ -274,6 +274,8 @@ def check_models(report, client, classes):
         report.add(section, FAIL, "No checkpoints installed at all", "",
                    "Put FLUX.1 Dev FP8 in ComfyUI/models/checkpoints and restart ComfyUI.")
 
+    check_kontext(report, section, info, classes, options)
+
     flux_adapters = options("IPAdapterFluxLoader", "ipadapter")
     sd_adapters = options("IPAdapterModelLoader", "ipadapter_file")
     if flux_adapters:
@@ -316,6 +318,56 @@ def check_models(report, client, classes):
         report.add(section, WARN, "No CLIP vision model installed",
                    "IP-Adapter needs one to read the turnaround sheet.",
                    "Download a CLIP-ViT vision model into ComfyUI/models/clip_vision.")
+
+
+def check_kontext(report, section, info, classes, options):
+    """Kontext is the primary way this app holds a character between shots.
+
+    Three separate things have to be true and each fails differently, so they
+    are reported separately rather than as one "Kontext missing". The nodes are
+    core, the model is a distinct download, and the model is a bare diffusion
+    model that needs its own text encoders and VAE alongside it.
+    """
+    missing_nodes = [n for n in ("ReferenceLatent", "FluxKontextImageScale")
+                     if n not in classes]
+    if missing_nodes:
+        report.add(section, FAIL, "This ComfyUI has no Kontext support",
+                   f"Missing: {', '.join(missing_nodes)}.",
+                   "Update ComfyUI. Kontext conditioning ships in core, not as a\n"
+                   "custom node, so an update is the whole fix. Without it the only\n"
+                   "option is IP-Adapter, which holds a character loosely.")
+        return
+
+    unets = options("UNETLoader", "unet_name")
+    kontext = [u for u in unets if "kontext" in str(u).lower()]
+    if not kontext:
+        report.add(section, FAIL, "No FLUX Kontext model installed",
+                   f"{len(unets)} diffusion models are present, none of them Kontext.",
+                   "Download flux1-dev-kontext_fp8_scaled.safetensors from\n"
+                   "Comfy-Org/flux1-kontext-dev_ComfyUI into\n"
+                   "ComfyUI/models/diffusion_models (11 GB, ungated).\n"
+                   "Plain FLUX.1 dev cannot do this -- Kontext is a separate model.")
+        return
+
+    report.add(section, OK, f"FLUX Kontext model found: {kontext[0]}")
+
+    # Kontext ships as a bare diffusion model. Everything an all-in-one
+    # checkpoint bundles has to be present separately, and the failure when it
+    # isn't happens at load time with a message about a missing file rather
+    # than about Kontext.
+    clips = options("DualCLIPLoader", "clip_name1")
+    vaes = options("VAELoader", "vae_name")
+    if not any("clip_l" in str(c).lower() for c in clips) or \
+       not any("t5" in str(c).lower() for c in clips):
+        report.add(section, FAIL, "Kontext has no text encoders to load",
+                   f"models/clip holds: {', '.join(str(c) for c in clips[:6]) or 'nothing'}.",
+                   "Kontext is a bare diffusion model, so it needs clip_l and t5xxl\n"
+                   "in ComfyUI/models/clip. An all-in-one FLUX checkpoint bundles\n"
+                   "these; this one does not.")
+    if not any(str(v).lower().startswith("ae") for v in vaes):
+        report.add(section, FAIL, "Kontext has no VAE to load",
+                   f"models/vae holds: {', '.join(str(v) for v in vaes[:6]) or 'nothing'}.",
+                   "Put the FLUX ae.safetensors in ComfyUI/models/vae.")
 
 
 def check_workflow(report, cfg, classes):
@@ -364,10 +416,23 @@ def check_workflow(report, cfg, classes):
 
     from reference_conditioning import inspect_workflow
     found = inspect_workflow(workflow)
-    if found["can_lock_identity"]:
-        family = found.get("ipadapter_family") or "?"
+    if found["has_kontext"]:
         report.add(section, OK,
-                   f"It can lock a character's identity ({family.upper()} IP-Adapter + LoadImage)")
+                   "It can lock a character's identity (Kontext reference latent)")
+        if not found["has_kontext_scale"]:
+            report.add(section, WARN, "No FluxKontextImageScale node",
+                       "The reference goes in at whatever size it happens to be.",
+                       "Kontext was trained on a fixed set of resolutions. Add the\n"
+                       "scaler between LoadImage and VAEEncode -- without it results\n"
+                       "look softer in a way that reads as the model underperforming.")
+    elif found["can_lock_identity"]:
+        family = found.get("ipadapter_family") or "?"
+        report.add(section, WARN,
+                   f"Identity is held by the {family.upper()} IP-Adapter, not Kontext",
+                   "",
+                   "This works, but it conditions on a summary of the reference rather\n"
+                   "than the reference itself, so costume detail drifts and no weight\n"
+                   "setting recovers it. Rebuild with Kontext if this machine has it.")
         if family == "sd" and classes and "ApplyIPAdapterFlux" in classes:
             report.add(section, WARN,
                        "The workflow uses the SD/SDXL adapter, but a FLUX one is available",
@@ -376,15 +441,18 @@ def check_workflow(report, cfg, classes):
                        "the SD/SDXL adapter cannot condition a FLUX model.")
     else:
         report.add(section, FAIL, "It cannot lock a character's identity",
+                   f"Kontext: {found['has_kontext']}, "
                    f"IP-Adapter node: {found['has_ipadapter']}, "
                    f"LoadImage nodes: {found['load_image_nodes']}",
-                   "Add an ApplyIPAdapterFlux node (for FLUX) fed by a LoadImage, wired\n"
-                   "between the model loader and the sampler. Without it, every panel of\n"
-                   "a character sheet will be a different pig.")
+                   "Preferred: LoadImage -> FluxKontextImageScale -> VAEEncode ->\n"
+                   "ReferenceLatent onto the positive conditioning, driven by a FLUX\n"
+                   "Kontext model. Fallback: ApplyIPAdapterFlux fed by a LoadImage.\n"
+                   "Without one of these, every panel of a character sheet will be a\n"
+                   "different pig.")
 
     if found["can_anchor_scene"]:
         report.add(section, OK, "It can anchor a scene (VAEEncode present)")
-    else:
+    elif not found["has_kontext"]:
         report.add(section, WARN, "It cannot anchor a scene to a concept",
                    "No VAEEncode node.",
                    "Optional. Add LoadImage -> VAEEncode -> the sampler's latent_image\n"

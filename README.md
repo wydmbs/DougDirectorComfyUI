@@ -161,7 +161,9 @@ routes, and the registry — in dependency order, so the first failure is the on
 worth acting on. Also available as **Full preflight** on the Setup tab.
 
 **[SETUP.md](SETUP.md)** walks from a fresh GPU machine to your first real
-keyframe, including the shape the FLUX + IP-Adapter workflow needs to be.
+keyframe, including the shape the Kontext workflow needs to be — though
+`python kontext_workflow.py --write` will build and configure it for you from
+what the server reports it has.
 
 ## The model chain
 
@@ -170,11 +172,38 @@ machine through ComfyUI.**
 
 ```
 DRAFT (manual)          KEYFRAME + CLIP (GPU machine, via ComfyUI)
-ChatGPT / DALL-E 3      FLUX.1 Dev      keyframes, IP-Adapter locks the face
+ChatGPT / DALL-E 3      FLUX.1 Kontext  keyframes, the reference rides along intact
   app writes prompt  →  Minimax H3      dialogue, REF2VA
   you paste, save    →  LTX-2.5         camera moves, cuts
   attach the image   →  Runway Gen-4    physics, destruction
 ```
+
+### Why Kontext and not IP-Adapter
+
+The obvious question, once you have watched a character drift: *ChatGPT holds a
+reference image perfectly — why does FLUX struggle?*
+
+Because most FLUX reference conditioning isn't given the reference. IP-Adapter
+pushes the image through a vision encoder and hands the model a handful of
+embedding tokens — a summary of the picture, not the picture. Whatever the
+summary omitted cannot come back, at any weight. ChatGPT's image tool is
+natively multimodal: the reference is tokenized into the same sequence it
+generates in.
+
+FLUX.1 Kontext works the second way. The reference is VAE-encoded into a full
+latent grid and concatenated onto the sequence being denoised, so the model
+attends to real image content. Nothing is summarised away.
+
+This is a difference of mechanism, not of setting, which is why raising the
+adapter weight never closes the gap. Measured on the same reference and the same
+shot: IP-Adapter at 1.0 and 1.3 both swapped a distinctive floppy two-lobed comb
+for a generic serrated one; Kontext kept it, along with the wattle shape and the
+eye. IP-Adapter remains available as a fallback for machines without Kontext.
+
+One consequence worth knowing up front: Kontext is an **edit** model. It wants an
+instruction ("turn him to face left"), not a description of the scene. Anything
+you don't mention is inherited — so naming the wardrobe or the lighting is how
+they drift.
 
 ### Stage 1 — drafting stays manual, on purpose
 
@@ -184,10 +213,13 @@ add a dependency and a failure mode for nothing. Instead, on **Harry's tab →
 paste it into ChatGPT, save the image you like, and attach it back. That image
 becomes the draft everything downstream is anchored to.
 
-The prompts are opinionated about the things that matter later — plain grey
-background, flat studio lighting, all four angles on one sheet — because
-IP-Adapter reads a busy background as part of the character, and Minimax REF2VA
-needs the profiles.
+Harry writes two different prompts, because two different things want two
+different shapes. The **reference** is one character in one view on plain grey —
+that is what conditions a still, and a collage would condition on the collage.
+The **turnaround** is four angles on one sheet, which is what Minimax REF2VA
+needs to animate a head turn without the face melting. Both ask for a plain grey
+background and flat studio lighting, because a scenic reference is inherited
+along with the character.
 
 ### Stages 2 and 3 — everything renders on the GPU machine
 

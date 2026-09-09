@@ -38,6 +38,7 @@ import director_engine as engine
 import draft_prompts
 import harry_ui
 import model_pipeline as mpipe
+import reference_conditioning as refcond
 from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 # ---------------------------------------------------------------------------
@@ -124,7 +125,8 @@ def _save_image(img: Image.Image, label: str, seed: int) -> str:
 # ---------------------------------------------------------------------------
 
 def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
-                seed_node, seed_input, storyboard_path, mock_mode, harry_provider):
+                seed_node, seed_input, storyboard_path, mock_mode, harry_provider,
+                conditioning_mode):
     global CFG
     workflow_path = CFG.workflow_json_path
     if workflow_file is not None:
@@ -138,6 +140,12 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         seed_node=seed_node.strip(),
         seed_input=seed_input.strip() or "seed",
     )
+    agent = CFG.agent
+    agent.reference_conditioning = _conditioning_key(conditioning_mode)
+    # Everything this form doesn't ask about is carried across rather than
+    # rebuilt from defaults. Constructing a fresh config here silently discarded
+    # the Azure credentials, the video workflow paths and the active project
+    # every time Setup was saved.
     CFG = cfgmod.ToolchainConfig(
         comfyui_url=comfyui_url.strip() or "http://127.0.0.1:8188",
         workflow_json_path=workflow_path,
@@ -146,6 +154,10 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         images_dir=CFG.images_dir,
         mock_mode=bool(mock_mode),
         harry_provider=harry_provider,
+        active_project_id=CFG.active_project_id,
+        azure=CFG.azure,
+        agent=agent,
+        video=CFG.video,
     )
     cfgmod.save_config(CFG)
     mode_msg = (
@@ -154,7 +166,33 @@ def setup_save(comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_in
         "✅ Saved. Mock mode is OFF — Build will now send real requests to ComfyUI at "
         f"{CFG.comfyui_url}."
     )
-    return mode_msg
+    return f"{mode_msg}<br>Identity: {refcond.describe_mode(CFG)}"
+
+
+# How a character survives from one shot to the next. The labels say what each
+# one actually does, because the difference is a mechanism rather than a
+# quality setting and picking the wrong one wastes an afternoon.
+CONDITIONING_CHOICES = [
+    ("Kontext — holds the character exactly (recommended)", refcond.MODE_KONTEXT),
+    ("IP-Adapter — holds the character approximately", refcond.MODE_IPADAPTER),
+    ("IP-Adapter + img2img — identity and scene", refcond.MODE_BOTH),
+    ("img2img only — scene look, no identity", refcond.MODE_IMG2IMG),
+    ("Off — prompt wording only", refcond.MODE_OFF),
+]
+
+
+def _conditioning_key(label) -> str:
+    for text, key in CONDITIONING_CHOICES:
+        if label in (text, key):
+            return key
+    return refcond.MODE_KONTEXT
+
+
+def _conditioning_label(key) -> str:
+    for text, value in CONDITIONING_CHOICES:
+        if value == key:
+            return text
+    return CONDITIONING_CHOICES[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -1619,6 +1657,17 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
                         seed_input = gr.Textbox(label="...field name on that node",
                                                  value=CFG.node_mapping.seed_input)
 
+                    gr.Markdown("**How should a character survive between shots?**")
+                    conditioning_mode = gr.Dropdown(
+                        label="Identity conditioning",
+                        choices=[text for text, _ in CONDITIONING_CHOICES],
+                        value=_conditioning_label(CFG.agent.reference_conditioning),
+                        info=("Kontext encodes the reference into the picture being generated, "
+                              "so the comb, the buttons and the wardrobe come through intact. "
+                              "IP-Adapter only passes a summary of the reference, so detail "
+                              "drifts no matter how high the weight goes."),
+                    )
+
             with gr.Group(elem_classes=["step-card", "step-3"]):
                 storyboard_path = gr.Textbox(
                     label="Where should locked images be recorded?",
@@ -1658,7 +1707,8 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
             setup_save_event = gr.Button("Save Setup", variant="primary").click(
                 setup_save,
                 inputs=[comfyui_url, workflow_file, pos_node, pos_input, neg_node, neg_input,
-                        seed_node, seed_input, storyboard_path, mock_mode, harry_provider],
+                        seed_node, seed_input, storyboard_path, mock_mode, harry_provider,
+                        conditioning_mode],
                 outputs=setup_status,
             )
 

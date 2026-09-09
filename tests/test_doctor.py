@@ -75,6 +75,41 @@ def full_workflow(path, denoise=0.6, with_ipadapter=True, flux_adapter=True):
         json.dump(workflow, handle, indent=2)
 
 
+def kontext_workflow_file(path, with_scale=True):
+    """The graph Kontext actually needs: the reference rides in the conditioning.
+
+    Note there is no IP-Adapter anywhere and denoise is 1.0 -- both correct here,
+    and both things the doctor used to complain about.
+    """
+    workflow = {
+        "1": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": "flux1-dev-kontext_fp8_scaled.safetensors"}},
+        "2": {"class_type": "DualCLIPLoader",
+              "inputs": {"clip_name1": "clip_l.safetensors",
+                         "clip_name2": "t5xxl_fp8_e4m3fn.safetensors"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+        "4": {"class_type": "LoadImage", "inputs": {"image": "rooster_ref_v1.png"}},
+        "6": {"class_type": "VAEEncode",
+              "inputs": {"pixels": ["5" if with_scale else "4", 0], "vae": ["3", 0]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": "turn him to face left", "clip": ["2", 0]}},
+        "8": {"class_type": "FluxGuidance",
+              "inputs": {"conditioning": ["7", 0], "guidance": 2.5}},
+        "9": {"class_type": "ReferenceLatent",
+              "inputs": {"conditioning": ["8", 0], "latent": ["6", 0]}},
+        "10": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["7", 0]}},
+        "11": {"class_type": "KSampler",
+               "inputs": {"model": ["1", 0], "positive": ["9", 0], "negative": ["10", 0],
+                          "latent_image": ["6", 0], "seed": 1, "denoise": 1.0}},
+        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
+        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0]}},
+    }
+    if with_scale:
+        workflow["5"] = {"class_type": "FluxKontextImageScale", "inputs": {"image": ["4", 0]}}
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(workflow, handle, indent=2)
+
+
 def run_doctor(workdir):
     result = subprocess.run(
         [sys.executable, os.path.join(ROOT, "doctor.py"),
@@ -217,6 +252,53 @@ def main():
     check("Nothing is blocking a render" in output or "Everything checks out" in output,
           "it says so plainly")
     check("denoise" not in output.lower(), "denoise 0.6 is not flagged")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[8] Kontext model never downloaded")
+    workdir = setup_workdir()
+    kontext_workflow_file(os.path.join(workdir, "wf.json"))
+    _patch_workflow_path(workdir, "wf.json", positive_node="7")
+    output = with_fake("no_kontext_model", lambda: run_doctor(workdir))
+    check("No FLUX Kontext model installed" in output,
+          "a missing Kontext model is reported, not assumed present")
+    check("flux1-dev-kontext" in output, "the fix names the exact file")
+    check("separate model" in output,
+          "it says plain FLUX.1 dev cannot stand in for Kontext")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[8b] Kontext model present but nothing to load it with")
+    workdir = setup_workdir()
+    kontext_workflow_file(os.path.join(workdir, "wf.json"))
+    _patch_workflow_path(workdir, "wf.json", positive_node="7")
+    output = with_fake("kontext_no_encoders", lambda: run_doctor(workdir))
+    check("no text encoders" in output.lower(), "missing clip_l/t5xxl is caught")
+    check("no VAE to load" in output, "the missing VAE is caught")
+    check("bare diffusion model" in output,
+          "it explains why an all-in-one checkpoint doesn't need these")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[9] A Kontext workflow is accepted on its own terms")
+    workdir = setup_workdir()
+    kontext_workflow_file(os.path.join(workdir, "wf.json"))
+    _patch_workflow_path(workdir, "wf.json", positive_node="7")
+    output = with_fake("complete", lambda: run_doctor(workdir))
+    check("Kontext reference latent" in output,
+          "identity locking via Kontext is recognised")
+    check("cannot lock a character's identity" not in output,
+          "a Kontext graph is not failed for having no IP-Adapter")
+    check("denoise" not in output.lower(),
+          "denoise 1.0 is not flagged -- correct for Kontext, wrong only for img2img")
+    check("0 blocking" in output, "a Kontext setup has no blockers")
+    shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n[9b] A Kontext workflow missing the resolution scaler")
+    workdir = setup_workdir()
+    kontext_workflow_file(os.path.join(workdir, "wf.json"), with_scale=False)
+    _patch_workflow_path(workdir, "wf.json", positive_node="7")
+    output = with_fake("complete", lambda: run_doctor(workdir))
+    check("No FluxKontextImageScale node" in output,
+          "an absent scaler is warned about, since it degrades quietly")
+    check("0 blocking" in output, "but it does not block a render")
     shutil.rmtree(workdir, ignore_errors=True)
 
     print(f"\nfailures: {len(FAILURES)}")

@@ -6,11 +6,24 @@ Without it, "the same pig, angrier" is just the words "a pig, angry" with a
 different seed, and every character drifts. With it, the ChatGPT turnaround
 sheet drives IP-Adapter-Plus and the face survives into a new composition.
 
-Two ways in, because they do different jobs:
+Three ways in, because they do different jobs:
 
-  IP-Adapter   the character's identity. Fed the turnaround sheet.
+  Kontext      the character's identity, exactly. The reference is VAE-encoded
+               into a full latent grid and rides along in the sequence the
+               model is denoising, so it attends to real pixels.
+  IP-Adapter   the character's identity, approximately. The reference goes
+               through a vision encoder and arrives as a handful of embedding
+               tokens -- a summary of the picture, not the picture. Costume
+               detail, button count and comb shape do not survive that
+               bottleneck at any weight.
   img2img      the scene's look. Fed the environment concept, at low denoise
                so the layout and palette hold.
+
+Kontext and IP-Adapter are not two settings of one thing; they are different
+mechanisms, which is why turning the adapter weight up never closes the gap.
+Kontext is an edit model, so it wants an instruction ("turn him to face left")
+rather than a fresh description of the scene -- re-describing the character
+makes it redraw instead of transform.
 
 The workflow has to actually contain the nodes. When it doesn't, the caller
 gets a message naming exactly what to add -- never a silent no-op that looks
@@ -21,9 +34,13 @@ import os
 
 MODE_OFF = "off"
 MODE_IPADAPTER = "ipadapter"
+MODE_KONTEXT = "kontext"
 MODE_IMG2IMG = "img2img"
 MODE_BOTH = "both"
-SUPPORTED_MODES = (MODE_OFF, MODE_IPADAPTER, MODE_IMG2IMG, MODE_BOTH)
+SUPPORTED_MODES = (MODE_OFF, MODE_KONTEXT, MODE_IPADAPTER, MODE_IMG2IMG, MODE_BOTH)
+
+# The modes that carry a character's identity, whichever mechanism they use.
+IDENTITY_MODES = (MODE_KONTEXT, MODE_IPADAPTER, MODE_BOTH)
 
 # Node classes that accept a reference, most specific first.
 #
@@ -37,6 +54,11 @@ IPADAPTER_FLUX_CLASSES = ("ApplyIPAdapterFluxAdvanced", "ApplyIPAdapterFlux",
 IPADAPTER_SD_CLASSES = ("IPAdapterAdvanced", "IPAdapterApply", "IPAdapter",
                         "IPAdapterPlus", "IPAdapterFaceID")
 IPADAPTER_CLASSES = IPADAPTER_FLUX_CLASSES + IPADAPTER_SD_CLASSES
+# Kontext conditioning lives in ComfyUI core, not a custom node. ReferenceLatent
+# is the node that does the actual work -- it attaches the encoded reference to
+# the conditioning so its tokens travel with the ones being generated.
+KONTEXT_CLASSES = ("ReferenceLatent",)
+KONTEXT_SCALE_CLASSES = ("FluxKontextImageScale",)
 LOAD_IMAGE_CLASSES = ("LoadImage", "LoadImageFromPath", "ETN_LoadImageBase64")
 LATENT_CLASSES = ("VAEEncode",)
 
@@ -89,9 +111,13 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
 
     notes = []
 
-    if reference_image_path and mode in (MODE_IPADAPTER, MODE_BOTH):
+    if reference_image_path and mode in IDENTITY_MODES:
         if not os.path.exists(reference_image_path):
-            notes.append(f"turnaround sheet not found, identity not locked: {reference_image_path}")
+            notes.append(f"reference image not found, identity not locked: {reference_image_path}")
+        elif mode == MODE_KONTEXT:
+            note = _apply_kontext(workflow, reference_image_path, upload)
+            if note:
+                notes.append(note)
         else:
             note = _apply_ipadapter(workflow, reference_image_path,
                                     weight or _default_weight(cfg), upload)
@@ -110,7 +136,7 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
 
 
 def _default_weight(cfg) -> float:
-    return float(getattr(getattr(cfg, "agent", None), "ipadapter_weight", 0.8) or 0.8)
+    return float(getattr(getattr(cfg, "agent", None), "ipadapter_weight", 1.0) or 1.0)
 
 
 def _resolve(image_path: str, upload) -> str:
@@ -190,6 +216,55 @@ def _apply_ipadapter(workflow: dict, image_path: str, weight: float, upload=None
     return ""
 
 
+def _apply_kontext(workflow: dict, image_path: str, upload=None) -> str:
+    """Point the Kontext reference chain at the locked design.
+
+    The chain is LoadImage -> FluxKontextImageScale -> VAEEncode ->
+    ReferenceLatent, so the filename belongs at the far end of it. Starting from
+    ReferenceLatent and walking back means the graph can be shaped differently
+    -- an extra crop, a stitch, no scaler at all -- and this still finds the
+    node that reads a file.
+    """
+    reference_id, _ = _find(workflow, KONTEXT_CLASSES)
+    if reference_id is None:
+        return ("the workflow has no ReferenceLatent node, so the character's identity was "
+                "not locked -- wire LoadImage -> FluxKontextImageScale -> VAEEncode -> "
+                "ReferenceLatent onto the positive conditioning, and drive the sampler with "
+                "a FLUX Kontext model (plain FLUX.1 dev cannot do this)")
+
+    try:
+        reference = _resolve(image_path, upload)
+    except Exception as error:  # noqa: BLE001 - reported, never silently skipped
+        return f"could not send the reference to ComfyUI, identity not locked: {error}"
+
+    loader_id, loader = _trace_to_loader(workflow, reference_id, "latent")
+    if loader_id is not None:
+        loader.setdefault("inputs", {})["image"] = reference
+        return _note_kontext_scale(workflow)
+
+    loader_id, loader = _find(workflow, LOAD_IMAGE_CLASSES)
+    if loader_id is None:
+        return ("the ReferenceLatent node has no LoadImage feeding it, so the reference was "
+                "not applied -- add a LoadImage and encode it into the reference latent")
+    loader.setdefault("inputs", {})["image"] = reference
+    return _note_kontext_scale(workflow)
+
+
+def _note_kontext_scale(workflow: dict) -> str:
+    """Kontext was trained on a fixed set of resolutions.
+
+    Hand it anything else and quality falls off in a way that reads as the model
+    being bad rather than the image being the wrong shape, so an absent scaler is
+    worth saying out loud even though the render will still complete.
+    """
+    scale_id, _ = _find(workflow, KONTEXT_SCALE_CLASSES)
+    if scale_id is None:
+        return ("no FluxKontextImageScale node, so the reference goes in at whatever size it "
+                "happens to be -- add one between the LoadImage and the VAEEncode, or expect "
+                "softer results that look like the model underperforming")
+    return ""
+
+
 def _apply_img2img(workflow: dict, image_path: str, upload=None) -> str:
     """Anchor the background by encoding the scene concept as the start latent."""
     encode_id, encode = _find(workflow, LATENT_CLASSES)
@@ -241,22 +316,35 @@ def inspect_workflow(workflow: dict) -> dict:
     flux_id, _ = _find(workflow, IPADAPTER_FLUX_CLASSES)
     sd_id, _ = _find(workflow, IPADAPTER_SD_CLASSES)
     adapter_id = flux_id or sd_id
+    kontext_id, _ = _find(workflow, KONTEXT_CLASSES)
+    scale_id, _ = _find(workflow, KONTEXT_SCALE_CLASSES)
     encode_id, _ = _find(workflow, LATENT_CLASSES)
     loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
+    # A Kontext graph encodes its reference through a VAEEncode too, so the
+    # presence of one no longer means the graph is doing img2img scene
+    # anchoring. Saying otherwise makes the doctor warn about a denoise of 1.0
+    # that is entirely correct for Kontext.
+    kontext = kontext_id is not None
     return {
         "has_ipadapter": adapter_id is not None,
         "ipadapter_family": "flux" if flux_id else ("sd" if sd_id else ""),
-        "has_img2img": encode_id is not None,
+        "has_kontext": kontext,
+        "has_kontext_scale": scale_id is not None,
+        "identity_mechanism": ("kontext" if kontext
+                               else ("ipadapter" if adapter_id is not None else "")),
+        "has_img2img": encode_id is not None and not kontext,
         "load_image_nodes": len(loaders),
-        "can_lock_identity": adapter_id is not None and bool(loaders),
-        "can_anchor_scene": encode_id is not None and bool(loaders),
+        "can_lock_identity": (kontext or adapter_id is not None) and bool(loaders),
+        "can_anchor_scene": encode_id is not None and bool(loaders) and not kontext,
     }
 
 
 def describe_mode(cfg) -> str:
     return {
         MODE_OFF: "Off — prompt text only. Continuity rests on wording alone.",
-        MODE_IPADAPTER: "IP-Adapter — the turnaround sheet locks the character's identity.",
+        MODE_KONTEXT: ("Kontext — the reference is encoded into the sequence being generated, "
+                       "so the character survives intact."),
+        MODE_IPADAPTER: "IP-Adapter — the reference guides identity, approximately.",
         MODE_IMG2IMG: "img2img — the scene concept anchors the background.",
-        MODE_BOTH: "IP-Adapter + img2img — identity from the turnaround, look from the scene.",
+        MODE_BOTH: "IP-Adapter + img2img — identity from the reference, look from the scene.",
     }.get(_mode(cfg), f"Unknown mode '{_mode(cfg)}'.")

@@ -70,6 +70,49 @@ if not failures:
         print(f"  FAIL  empty goal raised: {error}")
         failures.append("empty goal raised")
 
+    # Saving Setup must not discard the settings the form doesn't ask about.
+    # Azure credentials, video workflow paths and the active project are all
+    # invisible on that form, which is exactly why losing them went unnoticed.
+    try:
+        import config as cfgmod
+        before = cfgmod.ToolchainConfig()
+        before.azure.endpoint = "https://example.openai.azure.com"
+        before.video.ltx_workflow_path = "ltx.json"
+        before.active_project_id = "pig_and_rooster"
+        before.agent.max_steps = 77
+        app.CFG = before
+
+        app.setup_save("http://127.0.0.1:8188", None, "6", "text", "", "text",
+                       "3", "seed", "storyboard.xlsx", True, "Claude",
+                       "IP-Adapter — holds the character approximately")
+        after = cfgmod.load_config(os.environ["TOOLCHAIN_CONFIG_PATH"])
+
+        survives = [
+            ("the Azure endpoint survives a Setup save",
+             after.azure.endpoint == "https://example.openai.azure.com"),
+            ("the video workflow paths survive", after.video.ltx_workflow_path == "ltx.json"),
+            ("the active project survives", after.active_project_id == "pig_and_rooster"),
+            ("the agent settings survive", after.agent.max_steps == 77),
+            ("the conditioning mode the form owns is written",
+             after.agent.reference_conditioning == "ipadapter"),
+        ]
+        app.CFG = before
+        app.setup_save("http://127.0.0.1:8188", None, "6", "text", "", "text",
+                       "3", "seed", "storyboard.xlsx", True, "Claude",
+                       "Kontext — holds the character exactly (recommended)")
+        survives.append((
+            "the dropdown label round-trips back to the mode key",
+            cfgmod.load_config(os.environ["TOOLCHAIN_CONFIG_PATH"])
+            .agent.reference_conditioning == "kontext"))
+
+        for label, ok in survives:
+            print(f"  {'PASS' if ok else 'FAIL'}  {label}")
+            if not ok:
+                failures.append(label)
+    except Exception as error:  # noqa: BLE001
+        print(f"  FAIL  setup_save raised: {error}")
+        failures.append("setup_save raised")
+
 gr.Blocks.launch = _real_launch
 print(f"\nfailures: {len(failures)}")
 for failure in failures:
