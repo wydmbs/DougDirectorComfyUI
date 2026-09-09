@@ -186,6 +186,90 @@ def scenario_kontext():
     shutil.rmtree(workdir, ignore_errors=True)
 
 
+def scenario_instruction_shape():
+    print("\n[2c] A Kontext prompt is reviewed for shape before it costs a render")
+    from reference_conditioning import review_instruction
+    cfg = cfgmod.ToolchainConfig()
+
+    clean = review_instruction("Turn him to a three-quarter view facing left.", cfg)
+    check(clean == "", f"a surgical instruction passes without comment ({clean!r})")
+
+    # The exact prompt that turned a waistcoat into a lapelled jacket.
+    verbose = review_instruction(
+        "A rooster in a crimson waistcoat, three-quarter view, dramatic warm "
+        "side-lighting in a dark kitchen.", cfg)
+    check("description rather than an instruction" in verbose,
+          "a scene description is caught before it is rendered")
+    check("crimson" in verbose and "waistcoat" in verbose,
+          "the named attributes that will be regenerated are listed")
+    check("inherits anything the prompt leaves out" in verbose,
+          "it explains why naming them is the problem, not the fix")
+
+    # Naming an attribute inside an otherwise well-formed instruction is still
+    # worth saying, but must not be confused with the shape problem.
+    mixed = review_instruction("Turn him to face left under warm side-lighting.", cfg)
+    check("description rather than an instruction" not in mixed,
+          "a real instruction is not scolded for its shape")
+    check("lighting" in mixed, "but naming the lighting is still flagged")
+
+    off = cfgmod.ToolchainConfig()
+    off.agent.reference_conditioning = "ipadapter"
+    check(review_instruction("A rooster in a crimson waistcoat, dramatic light.", off) == "",
+          "IP-Adapter prompts are left alone -- they want a description")
+
+
+def scenario_multi_reference():
+    print("\n[2d] Two references: the graph is wired so both survive")
+    from kontext_workflow import build_kontext_workflow
+    models = {"unet": "kontext.safetensors", "clip_l": "clip_l.safetensors",
+              "t5": "t5xxl.safetensors", "vae": "ae.safetensors"}
+
+    def classes_of(wf, cls):
+        return [nid for nid, n in wf.items() if n["class_type"] == cls]
+
+    single, _ = build_kontext_workflow(models, reference_image="a.png", steps=20,
+                                       guidance=2.5, seed=1)
+    check(len(classes_of(single, "ReferenceLatent")) == 1,
+          "one reference produces one ReferenceLatent")
+
+    chained, _ = build_kontext_workflow(models, reference_image="a.png", steps=20,
+                                        guidance=2.5, seed=1,
+                                        extra_references=["b.png"], multi="chain")
+    refs = classes_of(chained, "ReferenceLatent")
+    check(len(refs) == 2, "chaining gives each reference its own ReferenceLatent")
+    check(len(classes_of(chained, "VAEEncode")) == 2,
+          "and its own encode, so neither is downsampled to share a budget")
+    # The second must consume the first, or the first is simply discarded and
+    # the graph looks correct while conditioning on one image.
+    second = chained["9_1"]["inputs"]["conditioning"]
+    check(second == ["9_0", 0],
+          "the second reference extends the first rather than replacing it")
+    check(chained["11"]["inputs"]["positive"] == ["9_1", 0],
+          "the sampler is fed the end of the chain")
+
+    stitched, _ = build_kontext_workflow(models, reference_image="a.png", steps=20,
+                                         guidance=2.5, seed=1,
+                                         extra_references=["b.png"], multi="stitch")
+    check(len(classes_of(stitched, "ImageStitch")) == 1,
+          "stitching joins the references into one picture")
+    check(len(classes_of(stitched, "ReferenceLatent")) == 1,
+          "which the model then reads as a single frame")
+    # Output size follows the starting latent. Taking it from the stitched
+    # sheet would silently double the width of every frame.
+    canvas = stitched["11"]["inputs"]["latent_image"][0]
+    check(stitched[canvas]["inputs"]["pixels"][0] == "5_c",
+          "the output canvas comes from the first reference alone, not the joined sheet")
+    check(stitched["5_c"]["inputs"]["image"] == ["4_0", 0],
+          "and that canvas traces back to the primary reference")
+
+    try:
+        build_kontext_workflow(models, reference_image="a.png", steps=20, guidance=2.5,
+                               seed=1, extra_references=["b.png"], multi="collage")
+        check(False, "an unknown strategy is rejected")
+    except Exception as error:  # noqa: BLE001
+        check("collage" in str(error), "an unknown strategy is rejected by name")
+
+
 def scenario_stages(cfg):
     print("\n[3] Stage detection reads the registry, not a status field")
     check(pipeline.next_stage({}) == pipeline.STAGE_DRAFT, "nothing yet -> draft")
@@ -326,6 +410,8 @@ def main():
         scenario_routing()
         scenario_ipadapter()
         scenario_kontext()
+        scenario_instruction_shape()
+        scenario_multi_reference()
         scenario_stages(cfg)
         scenario_registry_columns(cfg)
         scenario_migration()

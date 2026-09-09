@@ -66,6 +66,22 @@ def registry_lock(path: str, timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float
             handle = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(handle, token.encode("utf-8"))
             os.close(handle)
+        except PermissionError as exc:
+            # Windows raises this instead of FileExistsError while the lock file
+            # is delete-pending -- the previous holder has unlinked it but a
+            # handle (ours, an indexer's, or a virus scanner's) is still open.
+            # That is contention, not a broken permission, so wait it out. If it
+            # really is a read-only folder we will simply time out below, and the
+            # cause is carried through so the message says so.
+            denied = exc
+            if time.time() - started >= timeout_s:
+                raise RegistryLockTimeout(
+                    f"The registry lock could not be created within {timeout_s:.0f}s "
+                    f"and access kept being denied -- if the folder is read-only "
+                    f"that is the cause rather than another writer: {path}"
+                ) from denied
+            time.sleep(poll_s)
+            continue
         except FileExistsError:
             if time.time() - started >= timeout_s and _reclaimable(lock_file, timeout_s):
                 # Reclaiming has to be exclusive too. Checking "is this stale?"
@@ -78,7 +94,7 @@ def registry_lock(path: str, timeout_s: float = DEFAULT_TIMEOUT_S, poll_s: float
                 try:
                     reclaim_handle = os.open(
                         reclaim_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                except FileExistsError:
+                except (FileExistsError, PermissionError):
                     time.sleep(poll_s)
                     continue
                 try:

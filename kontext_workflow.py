@@ -75,7 +75,28 @@ def resolve_kontext_models(info: dict) -> dict:
 
 
 def build_kontext_workflow(models: dict, *, reference_image: str, steps: int,
-                           guidance: float, seed: int, denoise: float = 1.0) -> tuple:
+                           guidance: float, seed: int, denoise: float = 1.0,
+                           extra_references=(), multi: str = "chain") -> tuple:
+    """Wire a Kontext graph for one reference, or several.
+
+    Two ways to give Kontext more than one reference, and they are not
+    interchangeable:
+
+      chain   each image gets its own encode and its own ReferenceLatent, and
+              the conditioning passes through all of them. Every reference
+              keeps its full resolution and its own identity. This is what you
+              want for "this character, in this room".
+
+      stitch  the images are joined into one picture before encoding, so the
+              model reads them as a single scene. Useful when the relationship
+              between them matters -- a size comparison, a before/after -- and
+              wasteful otherwise, since each image gets a fraction of the
+              token budget.
+
+    A subtlety worth stating: the sampler's starting latent decides the output
+    size. Under `stitch` that must come from the first reference alone, or a
+    pair of 1024s would silently produce a 2048-wide frame.
+    """
     wf: dict = {}
 
     def node(nid, cls, inputs, title):
@@ -88,25 +109,78 @@ def build_kontext_workflow(models: dict, *, reference_image: str, steps: int,
           "type": "flux", "device": "default"}, "Text encoders")
     node("3", "VAELoader", {"vae_name": models["vae"]}, "VAE")
 
-    node("4", "LoadImage", {"image": reference_image, "upload": "image"}, "Reference")
-    # Kontext was trained on a specific set of resolutions; feeding it anything
-    # else degrades it in ways that look like the model being bad at its job.
-    node("5", "FluxKontextImageScale", {"image": ["4", 0]}, "Fit to Kontext grid")
-    node("6", "VAEEncode", {"pixels": ["5", 0], "vae": ["3", 0]}, "Encode reference")
+    references = [reference_image] + [r for r in extra_references if r]
+    if len(references) > 1 and multi not in ("chain", "stitch"):
+        raise BuildError(f"Unknown multi-reference strategy '{multi}'. Use chain or stitch.")
+
+    def load_and_encode(image, index):
+        """LoadImage -> fit to Kontext's grid -> latent. Returns the encode id."""
+        load_id, scale_id, enc_id = f"4_{index}", f"5_{index}", f"6_{index}"
+        node(load_id, "LoadImage", {"image": image, "upload": "image"},
+             f"Reference {index + 1}")
+        # Kontext was trained on a specific set of resolutions; feeding it
+        # anything else degrades it in ways that look like the model being bad
+        # at its job.
+        node(scale_id, "FluxKontextImageScale", {"image": [load_id, 0]},
+             f"Fit reference {index + 1}")
+        node(enc_id, "VAEEncode", {"pixels": [scale_id, 0], "vae": ["3", 0]},
+             f"Encode reference {index + 1}")
+        return load_id, enc_id
 
     node("7", "CLIPTextEncode", {"text": "", "clip": ["2", 0]}, "Instruction")
     node("8", "FluxGuidance", {"conditioning": ["7", 0], "guidance": guidance}, "Guidance")
-    # This is the whole trick: the reference latent is attached to the
-    # conditioning, so its tokens ride along in the sequence being denoised.
-    node("9", "ReferenceLatent", {"conditioning": ["8", 0], "latent": ["6", 0]},
-         "Attach reference tokens")
+
+    if len(references) == 1 or multi == "chain":
+        conditioning = ["8", 0]
+        canvas_encode = None
+        for index, image in enumerate(references):
+            _, enc_id = load_and_encode(image, index)
+            if canvas_encode is None:
+                canvas_encode = enc_id
+            # This is the whole trick: the reference latent is attached to the
+            # conditioning, so its tokens ride along in the sequence being
+            # denoised. Chaining adds another without displacing the first.
+            ref_id = f"9_{index}"
+            node(ref_id, "ReferenceLatent",
+                 {"conditioning": conditioning, "latent": [enc_id, 0]},
+                 f"Attach reference {index + 1}")
+            conditioning = [ref_id, 0]
+    else:
+        stitched = None
+        for index, image in enumerate(references):
+            load_id = f"4_{index}"
+            node(load_id, "LoadImage", {"image": image, "upload": "image"},
+                 f"Reference {index + 1}")
+            if stitched is None:
+                stitched = [load_id, 0]
+                continue
+            stitch_id = f"14_{index}"
+            node(stitch_id, "ImageStitch",
+                 {"image1": stitched, "image2": [load_id, 0], "direction": "right",
+                  "match_image_size": True, "spacing_width": 0, "spacing_color": "white"},
+                 f"Stitch reference {index + 1}")
+            stitched = [stitch_id, 0]
+
+        node("5_s", "FluxKontextImageScale", {"image": stitched}, "Fit stitched sheet")
+        node("6_s", "VAEEncode", {"pixels": ["5_s", 0], "vae": ["3", 0]}, "Encode sheet")
+        node("9_0", "ReferenceLatent",
+             {"conditioning": ["8", 0], "latent": ["6_s", 0]}, "Attach stitched reference")
+        conditioning = ["9_0", 0]
+
+        # The canvas comes from the first reference on its own. Taking it from
+        # the stitched sheet would make the output as wide as all the
+        # references laid side by side.
+        node("5_c", "FluxKontextImageScale", {"image": ["4_0", 0]}, "Fit output canvas")
+        node("6_c", "VAEEncode", {"pixels": ["5_c", 0], "vae": ["3", 0]}, "Canvas latent")
+        canvas_encode = "6_c"
+
     node("10", "ConditioningZeroOut", {"conditioning": ["7", 0]}, "Empty negative")
 
     # Starting from the reference's own latent rather than pure noise is what
     # makes this an edit of that image instead of a new picture that resembles it.
     node("11", "KSampler",
-         {"model": ["1", 0], "positive": ["9", 0], "negative": ["10", 0],
-          "latent_image": ["6", 0], "seed": seed, "steps": steps, "cfg": 1.0,
+         {"model": ["1", 0], "positive": conditioning, "negative": ["10", 0],
+          "latent_image": [canvas_encode, 0], "seed": seed, "steps": steps, "cfg": 1.0,
           "sampler_name": "euler", "scheduler": "simple", "denoise": denoise},
          "Sampler")
     node("12", "VAEDecode", {"samples": ["11", 0], "vae": ["3", 0]}, "Decode")
@@ -126,6 +200,10 @@ def main(argv=None) -> int:
     p.add_argument("--url", default="http://127.0.0.1:8188")
     p.add_argument("--out", default="workflows/flux_kontext_api.json")
     p.add_argument("--reference", default="example.png")
+    p.add_argument("--extra", action="append", default=[],
+                   help="An additional reference. Repeatable -- a backdrop, a prop.")
+    p.add_argument("--multi", default="chain", choices=("chain", "stitch"),
+                   help="chain keeps each reference whole; stitch joins them into one picture.")
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--guidance", type=float, default=2.5)
     p.add_argument("--seed", type=int, default=0)
@@ -140,10 +218,14 @@ def main(argv=None) -> int:
 
     try:
         info = fetch_object_info(a.url)
+        if a.extra and a.multi == "stitch" and "ImageStitch" not in info:
+            raise BuildError("This ComfyUI has no ImageStitch node. Update ComfyUI, "
+                             "or use --multi chain, which needs no extra nodes.")
         models = resolve_kontext_models(info)
         wf, mapping = build_kontext_workflow(
             models, reference_image=a.reference, steps=a.steps,
-            guidance=a.guidance, seed=a.seed)
+            guidance=a.guidance, seed=a.seed,
+            extra_references=a.extra, multi=a.multi)
 
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w", encoding="utf-8") as f:

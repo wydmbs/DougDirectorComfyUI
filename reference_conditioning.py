@@ -348,3 +348,58 @@ def describe_mode(cfg) -> str:
         MODE_IMG2IMG: "img2img — the scene concept anchors the background.",
         MODE_BOTH: "IP-Adapter + img2img — identity from the reference, look from the scene.",
     }.get(_mode(cfg), f"Unknown mode '{_mode(cfg)}'.")
+
+
+# Words that describe a thing Kontext would otherwise have inherited. Naming one
+# doesn't preserve it -- it hands the model licence to regenerate it.
+INHERITED_TERMS = (
+    "wearing", "waistcoat", "vest", "jacket", "shirt", "collar", "buttons",
+    "plumage", "feathers", "fur", "comb", "wattle", "beak", "eyes",
+    "crimson", "scarlet", "rust-red", "cream", "brass", "amber",
+    "lighting", "lit by", "side-lighting", "backlit", "rim light",
+)
+# An instruction starts with a verb aimed at the picture. A prompt that doesn't
+# is a description, and Kontext answers a description by drawing it fresh.
+INSTRUCTION_VERBS = (
+    "turn", "move", "rotate", "tilt", "raise", "lower", "open", "close",
+    "make", "change", "replace", "remove", "add", "put", "place", "swap",
+    "zoom", "pan", "crop", "reframe", "show", "have", "give", "point",
+    "look", "face", "lean", "step", "walk", "sit", "stand", "hold",
+)
+
+
+def review_instruction(prompt: str, cfg) -> str:
+    """What's wrong with this prompt, for the conditioning mode in use.
+
+    Only Kontext is opinionated here, and for a reason that is easy to get
+    backwards: it inherits everything the prompt doesn't mention. So the way to
+    keep a costume is to say nothing about it, and describing the character
+    "to be safe" is precisely what makes it drift. Measured on this project's
+    own reference -- the same shot, same seed, same reference image -- an
+    instruction that also asked for particular lighting and a particular room
+    came back with the waistcoat turned into a lapelled jacket. The instruction
+    alone kept the waistcoat, its three brass buttons and the studio light.
+
+    Returns "" when the prompt is shaped the way the model wants.
+    """
+    if _mode(cfg) != MODE_KONTEXT or not (prompt or "").strip():
+        return ""
+
+    text = prompt.strip()
+    lowered = text.lower()
+    notes = []
+
+    first = lowered.lstrip("\"'([").split(" ", 1)[0].strip(".,:;")
+    if first not in INSTRUCTION_VERBS:
+        notes.append(
+            "this reads as a description rather than an instruction, and Kontext answers a "
+            "description by drawing it fresh -- start with what should change "
+            "(\"Turn him to face left\") instead of restating the scene")
+
+    named = sorted({term for term in INHERITED_TERMS if term in lowered})
+    if named:
+        notes.append(
+            f"mentions {', '.join(named[:5])} -- Kontext inherits anything the prompt leaves "
+            "out, so naming an attribute lets it be regenerated rather than kept")
+
+    return " | ".join(notes)

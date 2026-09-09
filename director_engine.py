@@ -132,6 +132,14 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
 
         try:
             work = apply_node_overrides(workflow, cfg.node_mapping, prompt_positive, prompt_negative, seed)
+            if index == 0:
+                # Checked once per generation, not once per variant -- the
+                # prompt is the same for all of them, and repeating the note
+                # would make it look like several separate problems.
+                from reference_conditioning import review_instruction
+                shape = review_instruction(prompt_positive, cfg)
+                if shape:
+                    warnings.append(shape)
             if reference_image_path or scene_image_path:
                 from reference_conditioning import apply_reference
                 # Always upload rather than pass a path. It is correct whether
