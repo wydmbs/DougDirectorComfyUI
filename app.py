@@ -1559,7 +1559,7 @@ Otherwise, head to **Build** and call "action" on the first scene yourself.
 # UI
 # ---------------------------------------------------------------------------
 
-with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as demo:
+with gr.Blocks(title="ComfyUI Director Harness") as demo:
     if UI_IMAGES["app_icon"]:
         gr.HTML(
             f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">'
@@ -2124,9 +2124,7 @@ with gr.Blocks(title="ComfyUI Director Harness", theme=THEME, css=CUSTOM_CSS) as
     new_project_confirm.click(create_project_ui, inputs=[new_project_title, new_project_version, new_project_description], outputs=[project_selector, project_label, new_project_group, new_project_status])
     project_selector.change(switch_project_ui, inputs=project_selector, outputs=[project_selector, project_label, progress_panel])
 
-
-if __name__ == "__main__":
-        # ----------------------------------------------------- ChatGPT handoff
+    # ----------------------------------------------------- ChatGPT handoff
     draft_write_btn.click(
         draft_prompt_ui,
         inputs=[draft_type, draft_subject, draft_description, draft_era,
@@ -2189,4 +2187,12 @@ if __name__ == "__main__":
     demo.load(harry_rail_html, outputs=registry_rail)
     refresh_btn.click(harry_rail_html, outputs=registry_rail)
 
-demo.launch(favicon_path=FAVICON_PATH if os.path.exists(FAVICON_PATH) else None)
+if __name__ == "__main__":
+    # Gradio 6 moved theme and css off the Blocks constructor onto launch().
+    # Passing them above still "works" -- it warns and drops them, which costs
+    # the app its entire visual identity while appearing to start fine.
+    demo.launch(
+        theme=THEME,
+        css=CUSTOM_CSS,
+        favicon_path=FAVICON_PATH if os.path.exists(FAVICON_PATH) else None,
+    )
