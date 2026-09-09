@@ -240,8 +240,19 @@ def main(argv=None) -> int:
             cfg = load_config()
             cfg.workflow_json_path = os.path.abspath(a.out)
             cfg.node_mapping = NodeMapping(**mapping)
+            # An existing config may carry a conditioning mode from a previous
+            # setup. Leaving it alone is the dangerous option: an ipadapter
+            # setting against a Kontext graph finds no adapter node, attaches
+            # nothing, and still renders -- a picture of a stranger reported as
+            # success. Writing a Kontext workflow means committing to Kontext.
+            was = cfg.agent.reference_conditioning
+            cfg.agent.reference_conditioning = "kontext"
+            cfg.agent.kontext_guidance = a.guidance
             save_config(cfg)
             print(f"Configured {CONFIG_PATH}.")
+            if was != "kontext":
+                print(f"  reference conditioning: {was} -> kontext "
+                      f"(guidance {a.guidance})")
         return 0
     except BuildError as e:
         print(f"\nCannot build the Kontext workflow yet.\n\n{e}", file=sys.stderr)
