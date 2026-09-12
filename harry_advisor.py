@@ -320,6 +320,21 @@ def transcribe_audio(audio_path):
     return result.get("text", "").strip()
 
 
+def label_script_passages(provider, passages):
+    """Give structurally split source passages meaningful, script-aware labels."""
+    if not passages:
+        return []
+    payload = [{"index": index + 1, "text": excerpt[:900]} for index, (_, excerpt) in enumerate(passages[:24])]
+    system = """You are Harry The Helper, a film assistant director.
+Give every script passage a concise, meaningful production label. The label must name the dramatic action, setting, or story turn - not repeat the first words and not use generic labels such as Passage 1. Use 2-7 words. Preserve the exact index. Return JSON only: {"passages":[{"index":1,"label":"..."}]}."""
+    try:
+        data = _parse_json_block(_chat(provider, system, json.dumps(payload)))
+    except HarryError:
+        return [{"label": label, "excerpt": excerpt} for label, excerpt in passages]
+    labels = {int(item.get("index")): str(item.get("label") or "").strip() for item in data.get("passages", []) if str(item.get("index", "")).isdigit()}
+    return [{"label": labels.get(index + 1) or label, "excerpt": excerpt} for index, (label, excerpt) in enumerate(passages)]
+
+
 def playbook_path():
     return LIBRARY_DIR / "directors_playbook.json"
 

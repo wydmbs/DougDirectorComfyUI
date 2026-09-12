@@ -115,21 +115,89 @@ def assets_fragment(current=None):
     return '<div class="asset-grid">' + "".join(cards) + "</div>"
 
 
-def script_context_fragment(source: str) -> str:
-    passages = [part.strip() for part in (source or "").split("\n\n") if part.strip()]
+def _script_passages(source: str):
+    """Split a source into reviewable story passages, never arbitrary paragraphs.
+
+    Explicit headings own a passage. Long unheaded prose is grouped into
+    sentence-aware chunks, so a director can point Harry at one story moment
+    without selecting a whole act or duplicated adjacent text.
+    """
+    import re
+
+    lines = [line.strip() for line in (source or "").replace("\r\n", "\n").split("\n")]
+    heading = None
+    buffer = []
+    passages = []
+
+    def flush():
+        nonlocal buffer
+        body = " ".join(part for part in buffer if part).strip()
+        if not body:
+            buffer = []
+            return
+        sentences = re.split(r"(?<=[.!?])\s+", body)
+        chunk = []
+        for sentence in sentences:
+            proposed = " ".join(chunk + [sentence]).strip()
+            if chunk and len(proposed) > 700:
+                passages.append((heading or _passage_label(" ".join(chunk)), " ".join(chunk)))
+                chunk = [sentence]
+            else:
+                chunk.append(sentence)
+        if chunk:
+            passages.append((heading or _passage_label(" ".join(chunk)), " ".join(chunk)))
+        buffer = []
+
+    for line in lines:
+        if not line:
+            continue
+        is_heading = (
+            (line.startswith("[") and line.endswith("]"))
+            or (line.startswith("<") and line.endswith(">"))
+            or line.upper() == line and len(line) <= 90
+            or re.match(r"^(chapter|scene|act|prologue|epilogue|part)\b", line, re.I)
+        )
+        if is_heading:
+            flush()
+            heading = line.strip("[]<>").strip().title()
+        else:
+            buffer.append(line)
+    flush()
+
+    unique = []
+    seen = set()
+    for label, excerpt in passages:
+        normalized = " ".join(excerpt.lower().split())
+        if normalized and normalized not in seen:
+            unique.append((label, excerpt))
+            seen.add(normalized)
+    return unique
+
+
+def _passage_label(text: str):
+    words = text.split()
+    return " ".join(words[:8]).rstrip(".,:;-") or "Script passage"
+
+
+def script_context_fragment(source: str, semantic_passages=None) -> str:
+    passages = semantic_passages or [{"label": label, "excerpt": excerpt} for label, excerpt in _script_passages(source)]
     if not passages:
         return ""
     rows = []
-    for number, passage in enumerate(passages[:24], start=1):
-        excerpt = passage[:900]
-        rows.append('<button type="button" class="script-passage" data-script-excerpt="' + esc(excerpt) + '"><span>Passage ' + str(number) + '</span>' + esc(excerpt) + '</button>')
-    return '<details class="script-context"><summary>Script context - choose the passage your feedback refers to</summary><p>Click a passage to attach it to your Directors Feedback. Harry The Helper will use it as evidence when revising the proposals.</p><div class="script-passages">' + "".join(rows) + '</div></details>'
+    for number, passage in enumerate(passages, start=1):
+        label, excerpt = passage["label"], passage["excerpt"]
+        rows.append(
+            '<button type="button" class="script-passage" data-script-excerpt="' + esc(excerpt) + '" '
+            'data-script-label="' + esc(label) + '"><span>Passage ' + str(number) + ' - ' + esc(label) + '</span>'
+            '<p>' + esc(excerpt) + '</p></button>'
+        )
+    return '<details class="script-context"><summary>Script context - select one or more passages for Harry The Helper</summary><p>Choose the story moments your note refers to. Selected passages become evidence for the revision; use the scroll list to review the whole source.</p><div class="script-passages">' + "".join(rows) + '</div></details>'
 
 
-def call_sheet_fragment(plan: dict, source: str = ""):
+def call_sheet_fragment(plan: dict, source: str = "", semantic_passages=None):
     import uuid
     plan_id = str(uuid.uuid4())
-    call_sheets[plan_id] = {"plan": plan, "source": source}
+    call_sheets[plan_id] = {"plan": plan, "source": source, "semantic_passages": semantic_passages or []}
     groups = [("CHARACTER", "Cast"), ("BACKDROP", "World"), ("PROP", "Props"), ("SHOT", "Coverage")]
     sections = []
     for kind, label in groups:
@@ -145,7 +213,7 @@ def call_sheet_fragment(plan: dict, source: str = ""):
         sections.append('<section><div class="section-heading"><h2>' + label + "</h2>" + pill(str(len(items)) + " proposed") + '</div><div class="recommendation-grid">' + "".join(cards) + "</div></section>")
     questions = "".join("<li>" + esc(question) + "</li>" for question in plan.get("questions", []))
     question_html = "<ul class='questions'>" + questions + "</ul>" if questions else ""
-    return '<section class="call-sheet"><div class="section-heading"><div><div class="panel-kicker">HARRY THE HELPER CALL SHEET</div><h2>' + esc(plan.get("title")) + "</h2></div>" + pill(str(len(plan.get("items", []))) + " pieces", "active") + '</div><p class="summary">' + esc(plan.get("summary")) + "</p>" + question_html + script_context_fragment(source) + '<form hx-post="/harry/feedback" hx-target="#call-sheet" hx-indicator="#feedback-loading" class="feedback"><input type="hidden" name="plan_id" value="' + plan_id + '"><input type="hidden" name="context_excerpt" id="context-excerpt" value=""><div class="selected-context" id="selected-context">No script passage selected - feedback will apply to the whole call sheet.</div><label>DIRECTOR FEEDBACK<textarea name="feedback" rows="3" placeholder="Example: Make the dockyard a recurring backdrop. The selected passage shows crates travelling from the farm to the dock."></textarea></label><div><button>Ask Harry The Helper to amend the proposals</button><span id="feedback-loading" class="htmx-indicator">Harry The Helper is revising the call sheet...</span></div></form>' + "".join(sections) + "</section>"
+    return '<section class="call-sheet"><div class="section-heading"><div><div class="panel-kicker">HARRY THE HELPER CALL SHEET</div><h2>' + esc(plan.get("title")) + "</h2></div>" + pill(str(len(plan.get("items", []))) + " pieces", "active") + '</div><p class="summary">' + esc(plan.get("summary")) + "</p>" + question_html + script_context_fragment(source, semantic_passages) + '<form hx-post="/harry/feedback" hx-target="#call-sheet" hx-indicator="#feedback-loading" class="feedback"><input type="hidden" name="plan_id" value="' + plan_id + '"><input type="hidden" name="context_excerpt" id="context-excerpt" value=""><div class="selected-context" id="selected-context">No script passages selected - feedback will apply to the whole call sheet.</div><div class="selected-context-text" id="selected-context-text" hidden></div><label>DIRECTOR FEEDBACK<textarea name="feedback" rows="3" placeholder="Example: Make the dockyard a recurring backdrop. The selected passage shows crates travelling from the farm to the dock."></textarea></label><div><button>Ask Harry The Helper to amend the proposals</button><span id="feedback-loading" class="htmx-indicator">Harry The Helper is revising the call sheet...</span></div></form>' + "".join(sections) + "</section>"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -252,8 +320,11 @@ async def analyze_story(title: Annotated[str, Form()], source: Annotated[str, Fo
     except harry.HarryError as error:
         event(f"Harry The Helper could not finish the brief: {error}")
         return f'<div class="notice warn">{esc(error)}</div>'
-    event(f"Harry The Helper returned a call sheet with {len(plan['items'])} proposed pieces.")
-    return call_sheet_fragment(plan, source)
+    passages = _script_passages(source)
+    semantic_passages = await asyncio.to_thread(harry.label_script_passages, current.harry_provider, passages)
+    plan["script_passages"] = semantic_passages
+    event(f"Ready to Review: Harry The Helper prepared {len(plan['items'])} proposals and labeled {len(semantic_passages)} script moments.")
+    return call_sheet_fragment(plan, source, semantic_passages)
 
 @app.post("/harry/feedback", response_class=HTMLResponse)
 async def director_feedback(plan_id: Annotated[str, Form()], feedback: Annotated[str, Form()], context_excerpt: Annotated[str, Form()] = ""):
@@ -262,6 +333,7 @@ async def director_feedback(plan_id: Annotated[str, Form()], feedback: Annotated
         return '<div class="notice warn">That call sheet is no longer active. Ask Harry The Helper for a fresh brief first.</div>'
     plan = record["plan"]
     source = record.get("source", "")
+    semantic_passages = record.get("semantic_passages", plan.get("script_passages", []))
     current = current_cfg()
     event("The director gave Harry The Helper a call-sheet note." + (" Script context attached." if context_excerpt.strip() else ""))
     try:
@@ -273,7 +345,8 @@ async def director_feedback(plan_id: Annotated[str, Form()], feedback: Annotated
     event(f"Harry The Helper amended the call sheet: {len(revised['items'])} proposals now in play.")
     if learned:
         event("Director Playbook updated: " + learned)
-    result = call_sheet_fragment(revised, source)
+    revised["script_passages"] = semantic_passages
+    result = call_sheet_fragment(revised, source, semantic_passages)
     if learned:
         result = '<div class="notice good"><strong>Director Playbook updated.</strong> Harry The Helper will apply this next time: ' + esc(learned) + '</div>' + result
     return result
