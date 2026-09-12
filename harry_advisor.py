@@ -63,7 +63,8 @@ ITEM_SHAPE_NOTE = """Each item must have this exact shape:
   "positive_prompt": "initial target-model-aware visual prompt",
   "negative_prompt": "things to avoid",
   "beat": "the story section this is introduced or most associated with",
-  "reused_from": "optional prior item id"
+  "reused_from": "optional prior item id",
+  "camera_direction": "for SHOT only: concrete framing, movement, and focal action; empty otherwise"
 }"""
 
 CHARACTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
@@ -226,7 +227,7 @@ def _clean_items(raw_items):
         if kind == "SHOT" and not suggested:
             suggested = _slug(name) or "draft_shot"
         item["suggested_id"] = suggested
-        clean.append({key: str(item.get(key) or "") for key in ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from")})
+        clean.append({key: str(item.get(key) or "") for key in ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from", "camera_direction")})
     return clean
 
 
@@ -319,6 +320,52 @@ def transcribe_audio(audio_path):
     return result.get("text", "").strip()
 
 
+def playbook_path():
+    return LIBRARY_DIR / "directors_playbook.json"
+
+
+def load_playbook():
+    path = playbook_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [item for item in data.get("rules", []) if isinstance(item, dict) and item.get("rule")]
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def playbook_context():
+    rules = load_playbook()
+    if not rules:
+        return ""
+    lines = ["DIRECTOR PLAYBOOK - learned standing decisions. Apply these unless the current script directly conflicts:"]
+    lines.extend("- " + item["rule"] for item in rules[-12:])
+    return "\n".join(lines) + "\n\n"
+
+
+def learn_from_feedback(provider, plan, feedback, source_excerpt=""):
+    system = """You are Harry The Helper maintaining a director's production playbook.
+Extract ONE concise reusable creative or production rule from the feedback and amended call sheet. The rule must help a future script breakdown make a better proposal before the director repeats the note. Do not record one-off plot facts. Return JSON only: {"rule": "...", "reason": "..."}."""
+    user = "DIRECTOR FEEDBACK:\n" + (feedback or "") + "\n\nSCRIPT CONTEXT:\n" + (source_excerpt or "") + "\n\nAMENDED CALL SHEET:\n" + json.dumps(plan or {}, indent=2)
+    try:
+        data = _parse_json_block(_chat(provider, system, user))
+    except HarryError:
+        return None
+    rule = str(data.get("rule") or "").strip()
+    reason = str(data.get("reason") or "").strip()
+    if not rule:
+        return None
+    rules = load_playbook()
+    normalized = " ".join(rule.lower().split())
+    if any(" ".join(str(item.get("rule", "")).lower().split()) == normalized for item in rules):
+        return None
+    rules.append({"rule": rule, "reason": reason, "learned_at": _timestamp()})
+    LIBRARY_DIR.mkdir(exist_ok=True)
+    playbook_path().write_text(json.dumps({"rules": rules}, indent=2), encoding="utf-8")
+    return rule
+
+
 def _context_line(label, items):
     if not items:
         return f"{label}: none identified yet."
@@ -340,69 +387,126 @@ def _run_stage(provider, system_prompt, user_prompt, stage_name, warnings):
         return []
 
 
-def analyze(provider, title, source_text, source_path="", uploaded_path=None, era=""):
+def _run_shot_stage(provider, user_prompt):
+    """Coverage is mandatory, so retry once in a compact shape before failing.
+
+    Shot cards carry more fields than asset proposals. A long, detailed source
+    can therefore exceed a provider's response budget and leave a truncated
+    JSON object. The retry keeps the same planning job but asks for concise
+    field values and a bounded number of shots, which is more reliable than
+    accepting a call sheet with no coverage.
+    """
+    try:
+        shots = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, user_prompt))
+    except HarryError as first_error:
+        compact_prompt = user_prompt + """
+
+RECOVERY FORMAT: Your previous response could not be parsed. Return valid JSON only.
+Create 8-12 essential SHOT items, or one for every explicit marked section when there are fewer than 8. Keep description, continuity_note, positive_prompt, and negative_prompt concise (one sentence each). camera_direction is required for every shot. Do not add markdown, explanation, or text outside the JSON object."""
+        try:
+            shots = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, compact_prompt))
+        except HarryError as retry_error:
+            raise HarryError(
+                "Coverage planning failed twice, so Harry The Helper refused to save an incomplete call sheet. "
+                f"First attempt: {first_error}. Retry: {retry_error}"
+            ) from retry_error
+    missing_camera = [item.get("name", "unnamed shot") for item in shots["items"] if not item.get("camera_direction", "").strip()]
+    if not shots["items"]:
+        raise HarryError("Coverage planning returned no shots. Harry The Helper refused to save an incomplete call sheet.")
+    if missing_camera:
+        raise HarryError(
+            "Coverage planning returned shots without camera direction: " + ", ".join(missing_camera[:4]) + ". "
+            "Harry The Helper refused to save an incomplete call sheet."
+        )
+    return shots
+
+
+def analyze_staged(provider, title, source_text, source_path="", uploaded_path=None, era=""):
+    """Yield Harry's four real research passes and finally the completed plan."""
     if not source_text.strip():
         raise HarryError("Paste script/story text, or transcribe the uploaded audio first.")
     if not source_path:
         source_path = save_source(title, source_text, uploaded_path).get("source_id", "")
     notice = "The source stays local." if provider == "Ollama" else f"The source text will be sent to {provider} for this analysis."
     era_line = f"ERA / SETTING: {era}\n" if (era or "").strip() else ""
-    base = f"PROJECT TITLE: {title or 'Untitled project'}\n{era_line}\nSOURCE:\n{source_text}\n\n{notice}\n"
-
-    # Four separate, focused passes instead of one call trying to do
-    # everything at once. A single call asking for characters, backdrops,
-    # props, AND a full beat-by-beat shot breakdown in one JSON response
-    # spreads the model's attention thin across very different tasks --
-    # scene coverage in particular tends to get shortchanged since it's
-    # both the largest sub-task and the last thing reasoned about. Each
-    # stage below gets its own prompt, its own token budget, and knows
-    # what earlier stages already found so it can reference them for
-    # continuity without redefining them.
+    base = f"PROJECT TITLE: {title or 'Untitled project'}\n{era_line}\n{playbook_context()}SOURCE:\n{source_text}\n\n{notice}\n"
     warnings = []
+
     character_items = _run_stage(provider, CHARACTER_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings)
+    yield {"stage": "cast", "items": character_items, "source_path": source_path}
+
     backdrop_items = _run_stage(
         provider, BACKDROP_SYSTEM_PROMPT,
         base + _context_line("Already-identified characters", character_items) + "\nReturn the JSON now.",
         "Backdrops", warnings,
     )
+    yield {"stage": "world", "items": backdrop_items, "source_path": source_path}
+
     prop_items = _run_stage(
         provider, PROP_SYSTEM_PROMPT,
         base + _context_line("Already-identified characters", character_items) + "\n"
         + _context_line("Already-identified backdrops", backdrop_items) + "\nReturn the JSON now.",
         "Props", warnings,
     )
+    yield {"stage": "props", "items": prop_items, "source_path": source_path}
 
     shot_user_prompt = (
         base + _context_line("Characters", character_items) + "\n"
         + _context_line("Backdrops", backdrop_items) + "\n"
         + _context_line("Props", prop_items) + "\nReturn the JSON now."
     )
-    try:
-        shot_plan = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, shot_user_prompt))
-        shot_items = shot_plan["items"]
-        summary = shot_plan["summary"]
-        questions = shot_plan["questions"]
-    except HarryError as error:
-        warnings.append(f"⚠️ Shots pass failed: {error}")
-        shot_items, summary, questions = [], "", []
+    shot_plan = _run_shot_stage(provider, shot_user_prompt)
+    shot_items = shot_plan["items"]
+    summary = shot_plan["summary"]
+    questions = shot_plan["questions"]
 
     all_items = character_items + backdrop_items + prop_items + shot_items
     if not all_items:
         raise HarryError("Harry could not produce any recommendations. " + " ".join(warnings))
-
     if not summary:
         summary = (f"Identified {len(character_items)} character(s), {len(backdrop_items)} backdrop(s), "
                    f"{len(prop_items)} prop(s), and {len(shot_items)} shot(s) across separate focused passes.")
-
     plan = {"summary": summary, "questions": questions + warnings, "items": all_items}
     plan.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": title or "Untitled project", "provider": provider, "era": era or "", "created_at": _timestamp(), "source_path": source_path})
     LIBRARY_DIR.mkdir(exist_ok=True)
     (LIBRARY_DIR / f"plan_{plan['plan_id']}.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    yield {"stage": "complete", "plan": plan, "source_path": source_path}
+
+
+def analyze(provider, title, source_text, source_path="", uploaded_path=None, era=""):
+    plan = None
+    for event in analyze_staged(provider, title, source_text, source_path, uploaded_path, era):
+        if event["stage"] == "complete":
+            plan = event["plan"]
+    if plan is None:
+        raise HarryError("Harry could not produce a call sheet.")
     return plan
 
 
+def revise_plan(provider, plan, feedback, source_excerpt=""):
+    feedback = (feedback or "").strip()
+    if not feedback:
+        raise HarryError("Give Harry The Helper a specific note before asking for a revision.")
+    system = f"""{HARRY_PERSONA}
+You are revising an existing film-production call sheet after a director's note.
+Preserve proposals unaffected by the note. Add or amend entries when needed; do not silently remove story coverage.
+For every SHOT, camera_direction is mandatory: write a concise executable camera move, framing, and focal action. Example: Slow pan from the farm building across the field, then push into the pig.
+For logistics such as moving crates between country and dockyard, add the recurring PROP and coverage required to make it filmable and era-appropriate.
+{ERA_NOTE}
+Return JSON only with summary, questions, and items using this item shape:
+{ITEM_SHAPE_NOTE % ('kind', 'existing suggested ID or a correctly prefixed new ID')}"""
+    context = (source_excerpt or "").strip()
+    context_note = "\n\nSCRIPT CONTEXT SELECTED BY THE DIRECTOR:\n" + context if context else ""
+    user = "CURRENT CALL SHEET:\n" + json.dumps(plan or {}, indent=2) + context_note + "\n\nDIRECTOR FEEDBACK:\n" + feedback + "\n\nReturn the amended complete call sheet."
+    revised = _parse_plan(_chat(provider, system, user))
+    revised.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": (plan or {}).get("title", "Untitled project"), "provider": provider, "era": (plan or {}).get("era", ""), "created_at": _timestamp(), "source_path": (plan or {}).get("source_path", "")})
+    LIBRARY_DIR.mkdir(exist_ok=True)
+    (LIBRARY_DIR / f"plan_{revised['plan_id']}.json").write_text(json.dumps(revised, indent=2), encoding="utf-8")
+    return revised
+
+
 def plan_to_rows(plan):
-    return [[True, item["kind"], item["name"], item["suggested_id"], item["description"], item["continuity_note"], item["positive_prompt"], item["negative_prompt"], item["beat"], item["reused_from"]] for item in plan.get("items", [])]
+    return [[True, item["kind"], item["name"], item["suggested_id"], item["description"], item["continuity_note"], item["positive_prompt"], item["negative_prompt"], item["beat"], item["reused_from"], item.get("camera_direction", "")] for item in plan.get("items", [])]
 
 
 CALL_SHEET_COLUMNS = ["Use", "Type", "Name", "Suggested ID", "Description", "Continuity note",
