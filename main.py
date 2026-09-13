@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import os
 import random
 import subprocess
@@ -16,6 +17,7 @@ import harry_advisor as harry
 import model_pipeline
 import project_manager as projects
 import storyboard_store as store
+import specialists
 from comfy_client import ComfyClient
 from video_client import readiness
 
@@ -53,6 +55,54 @@ def set_project(project_id: str):
 def current_cfg():
     current = cfg()
     return set_project(current.active_project_id)
+
+
+
+def active_call_sheet_path(project_id: str):
+    return projects.workspace(project_id)["library"] / "active_call_sheet.json"
+
+
+def save_active_call_sheet(project_id: str, record: dict):
+    path = active_call_sheet_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+def load_active_call_sheet(project_id: str):
+    path = active_call_sheet_path(project_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def coverage_checkpoint_path(project_id: str):
+    return projects.workspace(project_id)["library"] / "coverage_checkpoint.json"
+
+
+def save_coverage_checkpoint(project_id: str, checkpoint: dict):
+    path = coverage_checkpoint_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+
+
+def load_coverage_checkpoint(project_id: str):
+    path = coverage_checkpoint_path(project_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def clear_coverage_checkpoint(project_id: str):
+    try:
+        coverage_checkpoint_path(project_id).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def event(message: str):
@@ -194,10 +244,22 @@ def script_context_fragment(source: str, semantic_passages=None) -> str:
     return '<details class="script-context"><summary>Script context - select one or more passages for Harry The Helper</summary><p>Choose the story moments your note refers to. Selected passages become evidence for the revision; use the scroll list to review the whole source.</p><div class="script-passages">' + "".join(rows) + '</div></details>'
 
 
+def clare_fragment(dossier):
+    if not dossier:
+        return "<div class='empty'>Clare has not been called yet. Once Harry's call sheet is ready, ask her to protect the cast and costume continuity.</div>"
+    cards = []
+    for item in dossier.get("dossiers", []):
+        states = "".join('<li><b>' + esc(state.get("beat")) + '</b> - ' + esc(state.get("state")) + '</li>' for state in item.get("wardrobe_states", []))
+        cards.append('<article class="specialist-card"><span class="eyebrow">' + esc(item.get("character_id")) + '</span><h3>' + esc(item.get("character_name")) + '</h3><h4>Identity lock</h4><p>' + esc(item.get("identity_lock")) + '</p><h4>Base costume / appearance</h4><p>' + esc(item.get("base_wardrobe")) + '</p><h4>Visibility</h4><p>' + esc(item.get("visibility_rules")) + '</p><h4>Watch for drift</h4><p>' + esc(item.get("drift_risks")) + '</p>' + ("<ul>" + states + "</ul>" if states else "") + '</article>')
+    return '<section class="specialist-output"><div class="section-heading"><div><div class="panel-kicker">CLARE - CASTING AND COSTUME</div><h2>Character continuity dossiers</h2></div>' + pill('Ready', 'done') + '</div><div class="specialist-grid">' + "".join(cards) + '</div></section>'
+
+
 def call_sheet_fragment(plan: dict, source: str = "", semantic_passages=None):
     import uuid
     plan_id = str(uuid.uuid4())
-    call_sheets[plan_id] = {"plan": plan, "source": source, "semantic_passages": semantic_passages or []}
+    record = {"plan_id": plan_id, "plan": plan, "source": source, "semantic_passages": semantic_passages or []}
+    call_sheets[plan_id] = record
+    save_active_call_sheet(current_cfg().active_project_id, record)
     groups = [("CHARACTER", "Cast"), ("BACKDROP", "World"), ("PROP", "Props"), ("SHOT", "Coverage")]
     sections = []
     for kind, label in groups:
@@ -209,11 +271,22 @@ def call_sheet_fragment(plan: dict, source: str = "", semantic_passages=None):
             camera = ""
             if item.get("kind") == "SHOT" and item.get("camera_direction"):
                 camera = '<div class="camera-note"><b>Camera</b> ' + esc(item["camera_direction"]) + "</div>"
-            cards.append('<article class="recommendation"><span class="eyebrow">' + esc(item.get("suggested_id")) + "</span><h3>" + esc(item.get("name")) + "</h3><p>" + esc(item.get("description")) + "</p>" + camera + "<small>" + esc(item.get("continuity_note")) + "</small></article>")
+            lighting = ""
+            if item.get("kind") == "SHOT" and item.get("lighting_direction"):
+                lighting = '<div class="lighting-note"><b>Lighting</b> ' + esc(item["lighting_direction"]) + "</div>"
+            cards.append('<article class="recommendation"><span class="eyebrow">' + esc(item.get("suggested_id")) + "</span><h3>" + esc(item.get("name")) + "</h3><p>" + esc(item.get("description")) + "</p>" + camera + lighting + "<small>" + esc(item.get("continuity_note")) + "</small></article>")
         sections.append('<section><div class="section-heading"><h2>' + label + "</h2>" + pill(str(len(items)) + " proposed") + '</div><div class="recommendation-grid">' + "".join(cards) + "</div></section>")
     questions = "".join("<li>" + esc(question) + "</li>" for question in plan.get("questions", []))
     question_html = "<ul class='questions'>" + questions + "</ul>" if questions else ""
-    return '<section class="call-sheet"><div class="section-heading"><div><div class="panel-kicker">HARRY THE HELPER CALL SHEET</div><h2>' + esc(plan.get("title")) + "</h2></div>" + pill(str(len(plan.get("items", []))) + " pieces", "active") + '</div><p class="summary">' + esc(plan.get("summary")) + "</p>" + question_html + script_context_fragment(source, semantic_passages) + '<form hx-post="/harry/feedback" hx-target="#call-sheet" hx-indicator="#feedback-loading" class="feedback"><input type="hidden" name="plan_id" value="' + plan_id + '"><input type="hidden" name="context_excerpt" id="context-excerpt" value=""><div class="selected-context" id="selected-context">No script passages selected - feedback will apply to the whole call sheet.</div><div class="selected-context-text" id="selected-context-text" hidden></div><label>DIRECTOR FEEDBACK<textarea name="feedback" rows="3" placeholder="Example: Make the dockyard a recurring backdrop. The selected passage shows crates travelling from the farm to the dock."></textarea></label><div><button>Ask Harry The Helper to amend the proposals</button><span id="feedback-loading" class="htmx-indicator">Harry The Helper is revising the call sheet...</span></div></form>' + "".join(sections) + "</section>"
+    clare_dossier = clare_fragment(specialists.load_dossier(projects.workspace(current_cfg().active_project_id)["library"]))
+    clare_call = f"""<form hx-post="/specialists/clare" hx-target="#clare-output" hx-indicator="#clare-loading" class="specialist-call">
+        <input type="hidden" name="plan_id" value="{plan_id}">
+        <div><span class="eyebrow">NEXT SPECIALIST</span><h3>Clare - Casting and Costume</h3>
+        <p>Locks character identity once, then maps costume, damage, visibility, and likely drift across Harry's coverage.</p></div>
+        <button>Ask Clare to build character dossiers</button>
+        <span id="clare-loading" class="htmx-indicator">Clare is reviewing the cast...</span>
+    </form><div id="clare-output">{clare_dossier}</div>"""
+    return '<section class="call-sheet"><div class="section-heading"><div><div class="panel-kicker">HARRY THE HELPER CALL SHEET</div><h2>' + esc(plan.get("title")) + "</h2></div>" + pill(str(len(plan.get("items", []))) + " pieces", "active") + '</div><p class="summary">' + esc(plan.get("summary")) + "</p>" + question_html + script_context_fragment(source, semantic_passages) + '<form hx-post="/harry/feedback" hx-target="#call-sheet" hx-indicator="#feedback-loading, #feedback-progress" class="feedback"><input type="hidden" name="plan_id" value="' + plan_id + '"><input type="hidden" name="context_excerpt" id="context-excerpt" value=""><div class="selected-context" id="selected-context">No script passages selected - feedback will apply to the whole call sheet.</div><div class="selected-context-text" id="selected-context-text" hidden></div><label>DIRECTOR FEEDBACK<textarea name="feedback" rows="3" placeholder="Example: Make the dockyard a recurring backdrop. The selected passage shows crates travelling from the farm to the dock."></textarea></label><div><button>Ask Harry The Helper to amend the proposals</button><span id="feedback-loading" class="htmx-indicator">Harry The Helper is revising the call sheet...</span></div><div id="feedback-progress" class="feedback-progress htmx-indicator"><span></span><div><b>Revision in progress</b><small>Harry The Helper is mapping your note, checking continuity, then applying only the changed proposals.</small></div></div></form>' + "".join(sections) + clare_call + "</section>"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -233,7 +306,18 @@ async def file(path: str):
 @app.get("/fragments/dashboard", response_class=HTMLResponse)
 async def dashboard():
     current = current_cfg()
-    return project_fragment(current) + status_fragment(current) + assets_fragment(current)
+    retry = ''
+    if load_coverage_checkpoint(current.active_project_id):
+        retry = '<div class="notice warn"><strong>Coverage checkpoint saved.</strong> Cast, world, and props are ready. <button hx-post="/harry/retry-coverage" hx-target="#call-sheet" hx-indicator="#coverage-retry-loading">Retry Coverage</button><span id="coverage-retry-loading" class="htmx-indicator">Resuming camera and lighting coverage...</span></div>'
+    engine_placeholder = '<div id="engine-status" hx-get="/fragments/engine-status" hx-trigger="load" class="notice">Checking render engine separately...</div>'
+    return project_fragment(current) + retry + engine_placeholder + assets_fragment(current)
+
+
+@app.get("/fragments/engine-status", response_class=HTMLResponse)
+async def engine_status():
+    # The ComfyUI client may wait on a dead/offline host. Keep that check off
+    # the dashboard critical path so Harry and Retry Coverage stay usable.
+    return await asyncio.to_thread(status_fragment, current_cfg())
 
 
 @app.get("/fragments/logs", response_class=HTMLResponse)
@@ -288,11 +372,35 @@ async def extract_source(source_file: UploadFile | None = File(default=None)):
     try:
         source = harry.extract_text_document(str(uploaded_path))
     except harry.HarryError as error:
-        return f'<div class="notice warn">{esc(error)}</div>'
+        return f'<div class="notice warn"><strong>Amendment not applied.</strong> {esc(error)} The active call sheet remains unchanged. Review the Production Log and the project diagnostics folder for details.</div>'
     if not source.strip():
         return '<div class="notice warn">That file opened, but no readable source text was found.</div>'
     event(f"Harry The Helper loaded {source_file.filename} for review.")
     return f'<textarea id="story-source" name="source" rows="13" class="w-full rounded-xl border border-violet-400 bg-slate-950 p-4 text-slate-100">{esc(source)}</textarea>'
+
+
+@app.post("/harry/retry-coverage", response_class=HTMLResponse)
+async def retry_coverage():
+    current = current_cfg()
+    checkpoint = load_coverage_checkpoint(current.active_project_id)
+    if not checkpoint:
+        return "<div class='notice warn'>No paused coverage checkpoint is available. Run Harry The Helper's brief first.</div>"
+    event("Retry Coverage requested. Reusing completed cast, world, and props; only coverage will call the provider.")
+    def progress(message):
+        event(message)
+    try:
+        plan = await asyncio.to_thread(harry.resume_coverage, current.harry_provider, checkpoint, progress)
+    except harry.HarryRateLimitError as error:
+        event(f"Coverage remains paused: provider rate limit reached. {error}")
+        return f'<div class="notice warn"><strong>Coverage is still rate limited.</strong> {esc(error)} The checkpoint remains saved; retry only coverage after the stated wait.</div>'
+    except harry.HarryError as error:
+        event(f"Coverage retry failed: {error}")
+        return f'<div class="notice warn">Coverage retry failed: {esc(error)} The checkpoint remains saved.</div>'
+    clear_coverage_checkpoint(current.active_project_id)
+    semantic_passages = await asyncio.to_thread(harry.label_script_passages, current.harry_provider, _script_passages(checkpoint["source_text"]))
+    plan["script_passages"] = semantic_passages
+    event(f"Ready to Review: Coverage resumed with {len([i for i in plan['items'] if i.get('kind') == 'SHOT'])} camera-and-lighting shots.")
+    return call_sheet_fragment(plan, checkpoint["source_text"], semantic_passages)
 
 
 @app.post("/harry/analyze", response_class=HTMLResponse)
@@ -314,30 +422,91 @@ async def analyze_story(title: Annotated[str, Form()], source: Annotated[str, Fo
         return '<div class="notice warn">Give Harry The Helper a script, story, treatment, narration, or source file first.</div>'
     current = current_cfg()
     harry.set_library_dir(projects.workspace(current.active_project_id)["library"])
-    event("Harry The Helper opened the script and began scouting the production.")
+    event("Harry The Helper opened the script. Starting four production passes: cast, world, props, then camera and lighting coverage.")
+    def progress(message):
+        event(message)
+    checkpoint = {"title": title, "era": era, "source_text": source, "source_path": "", "characters": [], "backdrops": [], "props": []}
     try:
-        plan = await asyncio.to_thread(harry.analyze, current.harry_provider, title, source, "", str(uploaded_path) if uploaded_path else None, era)
+        for stage in harry.analyze_staged(current.harry_provider, title, source, "", str(uploaded_path) if uploaded_path else None, era, progress):
+            if stage["stage"] == "cast":
+                checkpoint["characters"] = stage["items"]
+                checkpoint["source_path"] = stage.get("source_path", "")
+                save_coverage_checkpoint(current.active_project_id, checkpoint)
+            elif stage["stage"] == "world":
+                checkpoint["backdrops"] = stage["items"]
+                save_coverage_checkpoint(current.active_project_id, checkpoint)
+            elif stage["stage"] == "props":
+                checkpoint["props"] = stage["items"]
+                save_coverage_checkpoint(current.active_project_id, checkpoint)
+            elif stage["stage"] == "complete":
+                plan = stage["plan"]
+                clear_coverage_checkpoint(current.active_project_id)
+                break
+        else:
+            raise harry.HarryError("Harry The Helper stopped before producing a call sheet.")
+    except harry.HarryRateLimitError as error:
+        event(f"Harry The Helper paused: provider rate limit reached. {error}")
+        saved = save_coverage_checkpoint(current.active_project_id, checkpoint)
+        return f'<div class="notice warn"><strong>Coverage paused, not lost.</strong> {esc(error)} Cast, world, and props are checkpointed. Wait for the provider window, then use <b>Retry Coverage</b> to make only the camera-and-lighting request.</div>'
     except harry.HarryError as error:
         event(f"Harry The Helper could not finish the brief: {error}")
-        return f'<div class="notice warn">{esc(error)}</div>'
+        return f'<div class="notice warn"><strong>Harry The Helper could not complete the call sheet.</strong> {esc(error)} The Production Log records the pass that failed; a local diagnostic was saved for review.</div>'
     passages = _script_passages(source)
     semantic_passages = await asyncio.to_thread(harry.label_script_passages, current.harry_provider, passages)
     plan["script_passages"] = semantic_passages
-    event(f"Ready to Review: Harry The Helper prepared {len(plan['items'])} proposals and labeled {len(semantic_passages)} script moments.")
+    event(f"Ready to Review: Harry The Helper prepared {len(plan['items'])} proposals and labeled {len(semantic_passages)} script moments. Next step: review Harry The Helper's call sheet.")
     return call_sheet_fragment(plan, source, semantic_passages)
+
+@app.post("/specialists/clare", response_class=HTMLResponse)
+async def run_clare(plan_id: Annotated[str, Form()]):
+    record = call_sheets.get(plan_id) or load_active_call_sheet(current_cfg().active_project_id)
+    if record is None:
+        return '<div class="notice warn">Clare needs an active call sheet. Ask Harry The Helper for a brief first.</div>'
+    current = current_cfg()
+    event("Clare began reviewing character identity, costume, and framing constraints.")
+    try:
+        dossier = await asyncio.to_thread(specialists.clare_character_costume, current.harry_provider, record["plan"], record.get("source", ""), record["plan"].get("era", ""))
+        specialists.save_dossier(projects.workspace(current.active_project_id)["library"], dossier)
+    except specialists.SpecialistError as error:
+        event(f"Clare could not complete the character dossiers: {error}")
+        return f'<div class="notice warn">{esc(error)}</div>'
+    event("Clare is ready: character identity and costume dossiers are available for review.")
+    return clare_fragment(dossier)
+
+
+@app.get("/specialists/clare/current", response_class=HTMLResponse)
+async def current_clare():
+    current = current_cfg()
+    dossier = specialists.load_dossier(projects.workspace(current.active_project_id)["library"])
+    if dossier:
+        return clare_fragment(dossier)
+    record = load_active_call_sheet(current.active_project_id)
+    if record:
+        return '<div class="empty">Harry The Helper’s call sheet is ready. Clare is the next specialist: ask her to build character and costume dossiers from the call sheet.</div>'
+    return '<div class="empty">Clare joins after Harry The Helper has prepared a call sheet.</div>'
+
 
 @app.post("/harry/feedback", response_class=HTMLResponse)
 async def director_feedback(plan_id: Annotated[str, Form()], feedback: Annotated[str, Form()], context_excerpt: Annotated[str, Form()] = ""):
     record = call_sheets.get(plan_id)
     if record is None:
-        return '<div class="notice warn">That call sheet is no longer active. Ask Harry The Helper for a fresh brief first.</div>'
+        current_project = current_cfg().active_project_id
+        saved = load_active_call_sheet(current_project)
+        if saved:
+            record = saved
+            event("Recovered the active call sheet from the project library for amendment.")
+        else:
+            return '<div class="notice warn">No active call sheet was found for this project. Create one with Harry The Helper first.</div>'
     plan = record["plan"]
     source = record.get("source", "")
     semantic_passages = record.get("semantic_passages", plan.get("script_passages", []))
     current = current_cfg()
-    event("The director gave Harry The Helper a call-sheet note." + (" Script context attached." if context_excerpt.strip() else ""))
+    event("Director Feedback received." + (" Selected script context attached." if context_excerpt.strip() else ""))
+    event("Amendment stage 1/3: Harry The Helper is mapping the note to active proposals.")
+    def progress(message):
+        event(message)
     try:
-        revised = await asyncio.to_thread(harry.revise_plan, current.harry_provider, plan, feedback, context_excerpt)
+        revised = await asyncio.to_thread(harry.revise_plan, current.harry_provider, plan, feedback, context_excerpt, progress)
     except harry.HarryError as error:
         event(f"Harry The Helper could not revise the proposals: {error}")
         return f'<div class="notice warn">{esc(error)}</div>'

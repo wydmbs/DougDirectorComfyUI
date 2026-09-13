@@ -64,7 +64,8 @@ ITEM_SHAPE_NOTE = """Each item must have this exact shape:
   "negative_prompt": "things to avoid",
   "beat": "the story section this is introduced or most associated with",
   "reused_from": "optional prior item id",
-  "camera_direction": "for SHOT only: concrete framing, movement, and focal action; empty otherwise"
+  "camera_direction": "for SHOT only: concrete framing, movement, and focal action; empty otherwise",
+  "lighting_direction": "for SHOT only: time, source, contrast, and mood; empty otherwise"
 }"""
 
 CHARACTER_SYSTEM_PROMPT = f"""{HARRY_PERSONA}
@@ -117,6 +118,14 @@ class HarryError(Exception):
     pass
 
 
+class HarryRateLimitError(HarryError):
+    """The provider is throttling; retrying another analysis pass worsens it."""
+
+    def __init__(self, message, retry_after=""):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def _timestamp():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -152,6 +161,13 @@ def _request(url, headers, payload, timeout=120):
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:600]
+        retry_after = error.headers.get("Retry-After", "") if error.headers else ""
+        if error.code == 429:
+            wait = f" Retry after {retry_after} seconds." if retry_after else " Wait briefly, then try again."
+            raise HarryRateLimitError(
+                "The selected model is rate limited by its provider." + wait,
+                retry_after=retry_after,
+            ) from error
         raise HarryError(f"Provider returned HTTP {error.code}: {detail}") from error
     except urllib.error.URLError as error:
         raise HarryError(f"Could not reach the provider: {error.reason}") from error
@@ -227,7 +243,7 @@ def _clean_items(raw_items):
         if kind == "SHOT" and not suggested:
             suggested = _slug(name) or "draft_shot"
         item["suggested_id"] = suggested
-        clean.append({key: str(item.get(key) or "") for key in ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from", "camera_direction")})
+        clean.append({key: str(item.get(key) or "") for key in ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from", "camera_direction", "lighting_direction")})
     return clean
 
 
@@ -388,21 +404,55 @@ def _context_line(label, items):
     return f"{label}: {names}"
 
 
-def _run_stage(provider, system_prompt, user_prompt, stage_name, warnings):
-    """Runs one focused pass. A failure here doesn't abort the whole
-    analysis -- it's logged as a warning (surfaced to the director via the
-    questions list) and that stage simply contributes no items, so a
-    transient failure in, say, the props pass doesn't also cost the
-    characters and shots that already succeeded."""
+def _write_analysis_diagnostic(stage_name, error, raw=""):
+    """Persist enough local evidence to diagnose provider failures without leaking it to UI."""
     try:
+        folder = LIBRARY_DIR / "diagnostics"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{_slug(stage_name)}.json"
+        path.write_text(json.dumps({"stage": stage_name, "error": str(error), "raw_tail": (raw or "")[-4000:]}, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _run_stage(provider, system_prompt, user_prompt, stage_name, warnings, on_progress=None):
+    """Run one structured pass, recovering once from malformed provider JSON."""
+    raw = ""
+    try:
+        if on_progress:
+            on_progress(f"Harry The Helper is reviewing {stage_name.lower()}.")
         raw = _chat(provider, system_prompt, user_prompt)
-        return _parse_items(raw)
-    except HarryError as error:
-        warnings.append(f"⚠️ {stage_name} pass failed: {error}")
-        return []
+        items = _parse_items(raw)
+        if on_progress:
+            on_progress(f"{stage_name} complete: {len(items)} proposal(s) found.")
+        return items
+    except HarryRateLimitError:
+        if on_progress:
+            on_progress(f"{stage_name} paused: the provider is rate limiting requests. No retry was sent.")
+        raise
+    except HarryError as first_error:
+        if on_progress:
+            on_progress(f"{stage_name} response was malformed. Harry The Helper is retrying in a compact format.")
+        recovery = user_prompt + "\n\nRECOVERY FORMAT: Return valid JSON only. Keep every field concise. No markdown or explanation outside the JSON object."
+        try:
+            raw = _chat(provider, system_prompt, recovery)
+            items = _parse_items(raw)
+            if on_progress:
+                on_progress(f"{stage_name} recovered: {len(items)} proposal(s) found.")
+            return items
+        except HarryRateLimitError:
+            if on_progress:
+                on_progress(f"{stage_name} paused: the provider began rate limiting during recovery. No further retry was sent.")
+            raise
+        except HarryError as retry_error:
+            _write_analysis_diagnostic(stage_name, retry_error, raw)
+            warnings.append(f"{stage_name} pass failed after retry: {retry_error}")
+            if on_progress:
+                on_progress(f"{stage_name} could not be completed after retry.")
+            return []
 
 
-def _run_shot_stage(provider, user_prompt):
+def _run_shot_stage(provider, user_prompt, on_progress=None):
     """Coverage is mandatory, so retry once in a compact shape before failing.
 
     Shot cards carry more fields than asset proposals. A long, detailed source
@@ -411,32 +461,92 @@ def _run_shot_stage(provider, user_prompt):
     field values and a bounded number of shots, which is more reliable than
     accepting a call sheet with no coverage.
     """
+    raw = ""
     try:
-        shots = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, user_prompt))
+        if on_progress:
+            on_progress("Harry The Helper is planning camera and lighting coverage.")
+        raw = _chat(provider, SHOT_SYSTEM_PROMPT, user_prompt)
+        shots = _parse_plan(raw)
+    except HarryRateLimitError:
+        if on_progress:
+            on_progress("Coverage paused: the provider is rate limiting requests. No compact retry was sent.")
+        raise
     except HarryError as first_error:
         compact_prompt = user_prompt + """
 
 RECOVERY FORMAT: Your previous response could not be parsed. Return valid JSON only.
 Create 8-12 essential SHOT items, or one for every explicit marked section when there are fewer than 8. Keep description, continuity_note, positive_prompt, and negative_prompt concise (one sentence each). camera_direction is required for every shot. Do not add markdown, explanation, or text outside the JSON object."""
         try:
-            shots = _parse_plan(_chat(provider, SHOT_SYSTEM_PROMPT, compact_prompt))
+            if on_progress:
+                on_progress("Coverage response was malformed. Harry The Helper is retrying a compact shot plan.")
+            raw = _chat(provider, SHOT_SYSTEM_PROMPT, compact_prompt)
+            shots = _parse_plan(raw)
+        except HarryRateLimitError:
+            if on_progress:
+                on_progress("Coverage paused: the provider is rate limiting requests during recovery. No further retry was sent.")
+            raise
         except HarryError as retry_error:
+            _write_analysis_diagnostic("Coverage", retry_error, raw)
             raise HarryError(
                 "Coverage planning failed twice, so Harry The Helper refused to save an incomplete call sheet. "
                 f"First attempt: {first_error}. Retry: {retry_error}"
             ) from retry_error
     missing_camera = [item.get("name", "unnamed shot") for item in shots["items"] if not item.get("camera_direction", "").strip()]
+    missing_lighting = [item.get("name", "unnamed shot") for item in shots["items"] if not item.get("lighting_direction", "").strip()]
     if not shots["items"]:
         raise HarryError("Coverage planning returned no shots. Harry The Helper refused to save an incomplete call sheet.")
-    if missing_camera:
+    if missing_camera or missing_lighting:
+        missing = []
+        if missing_camera:
+            missing.append("camera direction: " + ", ".join(missing_camera[:4]))
+        if missing_lighting:
+            missing.append("lighting direction: " + ", ".join(missing_lighting[:4]))
         raise HarryError(
-            "Coverage planning returned shots without camera direction: " + ", ".join(missing_camera[:4]) + ". "
+            "Coverage planning returned incomplete shot direction (" + "; ".join(missing) + "). "
             "Harry The Helper refused to save an incomplete call sheet."
         )
+    if on_progress:
+        on_progress(f"Coverage complete: {len(shots['items'])} camera-and-lighting shot proposal(s) found.")
     return shots
 
 
-def analyze_staged(provider, title, source_text, source_path="", uploaded_path=None, era=""):
+def resume_coverage(provider, checkpoint, on_progress=None):
+    """Finish a rate-limited brief from its saved cast/world/prop checkpoint."""
+    checkpoint = checkpoint or {}
+    source_text = str(checkpoint.get("source_text") or "")
+    if not source_text.strip():
+        raise HarryError("The saved coverage checkpoint has no source text.")
+    characters = checkpoint.get("characters") or []
+    backdrops = checkpoint.get("backdrops") or []
+    props = checkpoint.get("props") or []
+    if not (characters or backdrops or props):
+        raise HarryError("The saved coverage checkpoint has no completed production passes.")
+    title = checkpoint.get("title") or "Untitled project"
+    era = checkpoint.get("era") or ""
+    notice = "The source stays local." if provider == "Ollama" else f"The source text will be sent to {provider} for this analysis."
+    era_line = f"ERA / SETTING: {era}\n" if era else ""
+    base = f"PROJECT TITLE: {title}\n{era_line}\n{playbook_context()}SOURCE:\n{source_text}\n\n{notice}\n"
+    shot_prompt = (
+        base + _context_line("Characters", characters) + "\n"
+        + _context_line("Backdrops", backdrops) + "\n"
+        + _context_line("Props", props) + "\nReturn the JSON now."
+    )
+    if on_progress:
+        on_progress("Resuming only camera and lighting coverage from the saved cast, world, and props checkpoint.")
+    shot_plan = _run_shot_stage(provider, shot_prompt, on_progress)
+    items = characters + backdrops + props + shot_plan["items"]
+    summary = shot_plan.get("summary") or (
+        f"Resumed coverage with {len(characters)} character(s), {len(backdrops)} backdrop(s), "
+        f"{len(props)} prop(s), and {len(shot_plan['items'])} shot(s)."
+    )
+    plan = {"summary": summary, "questions": shot_plan.get("questions") or [], "items": items}
+    plan.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": title, "provider": provider, "era": era, "created_at": _timestamp(), "source_path": checkpoint.get("source_path", "")})
+    LIBRARY_DIR.mkdir(exist_ok=True)
+    (LIBRARY_DIR / f"plan_{plan['plan_id']}.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    return plan
+
+
+def analyze_staged(provider, title, source_text, source_path="", uploaded_path=None, era="", on_progress=None):
     """Yield Harry's four real research passes and finally the completed plan."""
     if not source_text.strip():
         raise HarryError("Paste script/story text, or transcribe the uploaded audio first.")
@@ -447,13 +557,13 @@ def analyze_staged(provider, title, source_text, source_path="", uploaded_path=N
     base = f"PROJECT TITLE: {title or 'Untitled project'}\n{era_line}\n{playbook_context()}SOURCE:\n{source_text}\n\n{notice}\n"
     warnings = []
 
-    character_items = _run_stage(provider, CHARACTER_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings)
+    character_items = _run_stage(provider, CHARACTER_SYSTEM_PROMPT, base + "Return the JSON now.", "Characters", warnings, on_progress)
     yield {"stage": "cast", "items": character_items, "source_path": source_path}
 
     backdrop_items = _run_stage(
         provider, BACKDROP_SYSTEM_PROMPT,
         base + _context_line("Already-identified characters", character_items) + "\nReturn the JSON now.",
-        "Backdrops", warnings,
+        "Backdrops", warnings, on_progress,
     )
     yield {"stage": "world", "items": backdrop_items, "source_path": source_path}
 
@@ -461,7 +571,7 @@ def analyze_staged(provider, title, source_text, source_path="", uploaded_path=N
         provider, PROP_SYSTEM_PROMPT,
         base + _context_line("Already-identified characters", character_items) + "\n"
         + _context_line("Already-identified backdrops", backdrop_items) + "\nReturn the JSON now.",
-        "Props", warnings,
+        "Props", warnings, on_progress,
     )
     yield {"stage": "props", "items": prop_items, "source_path": source_path}
 
@@ -470,7 +580,7 @@ def analyze_staged(provider, title, source_text, source_path="", uploaded_path=N
         + _context_line("Backdrops", backdrop_items) + "\n"
         + _context_line("Props", prop_items) + "\nReturn the JSON now."
     )
-    shot_plan = _run_shot_stage(provider, shot_user_prompt)
+    shot_plan = _run_shot_stage(provider, shot_user_prompt, on_progress)
     shot_items = shot_plan["items"]
     summary = shot_plan["summary"]
     questions = shot_plan["questions"]
@@ -488,9 +598,9 @@ def analyze_staged(provider, title, source_text, source_path="", uploaded_path=N
     yield {"stage": "complete", "plan": plan, "source_path": source_path}
 
 
-def analyze(provider, title, source_text, source_path="", uploaded_path=None, era=""):
+def analyze(provider, title, source_text, source_path="", uploaded_path=None, era="", on_progress=None):
     plan = None
-    for event in analyze_staged(provider, title, source_text, source_path, uploaded_path, era):
+    for event in analyze_staged(provider, title, source_text, source_path, uploaded_path, era, on_progress):
         if event["stage"] == "complete":
             plan = event["plan"]
     if plan is None:
@@ -498,22 +608,112 @@ def analyze(provider, title, source_text, source_path="", uploaded_path=None, er
     return plan
 
 
-def revise_plan(provider, plan, feedback, source_excerpt=""):
+def _validate_shot_directions(items):
+    missing = []
+    for item in items:
+        if item.get("kind") != "SHOT":
+            continue
+        absent = [name for name in ("camera_direction", "lighting_direction") if not str(item.get(name) or "").strip()]
+        if absent:
+            missing.append(item.get("name", "unnamed shot") + " (" + ", ".join(absent) + ")")
+    if missing:
+        raise HarryError("The amendment returned incomplete coverage direction: " + ", ".join(missing[:4]))
+
+
+def _merge_revision(plan, updates, additions, summary, questions):
+    existing = [dict(item) for item in (plan or {}).get("items", [])]
+    by_id = {item.get("suggested_id"): index for index, item in enumerate(existing) if item.get("suggested_id")}
+    for item in updates:
+        key = item.get("suggested_id")
+        if key not in by_id:
+            raise HarryError("Harry tried to update an unknown proposal: " + str(key))
+        current = existing[by_id[key]]
+        existing[by_id[key]] = {**current, **{field: value for field, value in item.items() if value != ""}}
+    for item in additions:
+        key = item.get("suggested_id")
+        if key and key in by_id:
+            raise HarryError("Harry returned a duplicate new proposal: " + key)
+        existing.append(item)
+        if key:
+            by_id[key] = len(existing) - 1
+    _validate_shot_directions(existing)
+    revised = dict(plan or {})
+    revised["items"] = existing
+    revised["summary"] = str(summary or plan.get("summary") or "")
+    revised["questions"] = [str(question) for question in (questions or []) if str(question).strip()]
+    return revised
+
+
+def revise_plan(provider, plan, feedback, source_excerpt="", on_progress=None):
+    """Apply feedback as a compact delta, never a full call-sheet rewrite.
+
+    Large full-sheet rewrites were truncating at the provider output limit and
+    producing malformed JSON. The model now returns only changed proposals and
+    additions; deterministic merge code preserves every unaffected proposal.
+    """
     feedback = (feedback or "").strip()
     if not feedback:
         raise HarryError("Give Harry The Helper a specific note before asking for a revision.")
     system = f"""{HARRY_PERSONA}
 You are revising an existing film-production call sheet after a director's note.
-Preserve proposals unaffected by the note. Add or amend entries when needed; do not silently remove story coverage.
-For every SHOT, camera_direction is mandatory: write a concise executable camera move, framing, and focal action. Example: Slow pan from the farm building across the field, then push into the pig.
-For logistics such as moving crates between country and dockyard, add the recurring PROP and coverage required to make it filmable and era-appropriate.
+Return a COMPACT DELTA ONLY. Do not repeat unchanged proposals.
+
+Rules:
+- updates may modify only an existing suggested_id from the current sheet.
+- additions are new proposals required by the note.
+- Preserve all unaffected proposals; the application merges the delta.
+- For every new or amended SHOT, camera_direction and lighting_direction are mandatory.
+- camera_direction names framing, movement, and focal action.
+- lighting_direction names time, source, contrast, and emotional mood.
+- For logistics such as moving crates between country and dockyard, add the recurring PROP and coverage needed to make it filmable and era-appropriate.
 {ERA_NOTE}
-Return JSON only with summary, questions, and items using this item shape:
-{ITEM_SHAPE_NOTE % ('kind', 'existing suggested ID or a correctly prefixed new ID')}"""
+
+Return JSON only:
+{{
+  "summary": "revised one-sentence production reading",
+  "questions": [],
+  "updates": [{{"kind":"...", "suggested_id":"existing ID", "name":"...", "description":"...", "continuity_note":"...", "positive_prompt":"...", "negative_prompt":"...", "beat":"...", "reused_from":"...", "camera_direction":"for SHOT", "lighting_direction":"for SHOT"}}],
+  "additions": [{{"kind":"CHARACTER|BACKDROP|PROP|SHOT", "suggested_id":"new valid ID", "name":"...", "description":"...", "continuity_note":"...", "positive_prompt":"...", "negative_prompt":"...", "beat":"...", "reused_from":"", "camera_direction":"for SHOT", "lighting_direction":"for SHOT"}}]
+}}"""
     context = (source_excerpt or "").strip()
     context_note = "\n\nSCRIPT CONTEXT SELECTED BY THE DIRECTOR:\n" + context if context else ""
-    user = "CURRENT CALL SHEET:\n" + json.dumps(plan or {}, indent=2) + context_note + "\n\nDIRECTOR FEEDBACK:\n" + feedback + "\n\nReturn the amended complete call sheet."
-    revised = _parse_plan(_chat(provider, system, user))
+    current_items = (plan or {}).get("items", [])
+    user = "CURRENT PROPOSALS (for ID lookup only):\n" + json.dumps(current_items, indent=2) + context_note + "\n\nDIRECTOR FEEDBACK:\n" + feedback + "\n\nReturn the compact amendment delta now."
+
+    raw = ""
+    def request(recovery=False):
+        nonlocal raw
+        prompt = user
+        if recovery:
+            prompt += "\n\nRECOVERY FORMAT: Your prior response was malformed. Return valid compact JSON only. Limit additions plus updates to the proposals touched by the feedback. No markdown or prose outside JSON."
+        raw = _chat(provider, system, prompt)
+        data = _parse_json_block(raw)
+        if not isinstance(data, dict):
+            raise HarryError("Harry returned an unusable amendment object.")
+        updates = _clean_items(data.get("updates", []))
+        additions = _clean_items(data.get("additions", []))
+        return _merge_revision(plan, updates, additions, data.get("summary"), data.get("questions"))
+
+    try:
+        if on_progress:
+            on_progress("Harry The Helper is mapping your feedback against the active proposals.")
+        revised = request()
+    except HarryError as first_error:
+        _write_analysis_diagnostic("Director feedback first attempt", first_error, raw)
+        if on_progress:
+            on_progress("The first amendment response was malformed. Harry The Helper is retrying a compact revision.")
+        try:
+            revised = request(recovery=True)
+        except HarryError as retry_error:
+            _write_analysis_diagnostic("Director feedback retry", retry_error, raw)
+            raise HarryError(
+                "Harry The Helper could not apply this amendment after two attempts. "
+                "The active call sheet was left unchanged. "
+                f"First attempt: {first_error}. Retry: {retry_error}"
+            ) from retry_error
+    if on_progress:
+        changed = len(revised.get("items", [])) - len(current_items)
+        on_progress("Amendment complete: " + (str(changed) + " new proposal(s) added." if changed else "existing proposals updated without adding new ones."))
     revised.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": (plan or {}).get("title", "Untitled project"), "provider": provider, "era": (plan or {}).get("era", ""), "created_at": _timestamp(), "source_path": (plan or {}).get("source_path", "")})
     LIBRARY_DIR.mkdir(exist_ok=True)
     (LIBRARY_DIR / f"plan_{revised['plan_id']}.json").write_text(json.dumps(revised, indent=2), encoding="utf-8")

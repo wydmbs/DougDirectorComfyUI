@@ -1,0 +1,115 @@
+"""Specialist personas for the Director Harness.
+
+Harry establishes story intent. Specialists turn that intent into production
+constraints with structured, inspectable outputs.
+"""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+import harry_advisor as harry
+
+
+class SpecialistError(Exception):
+    pass
+
+
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _json(raw):
+    try:
+        return harry._parse_json_block(raw)
+    except harry.HarryError as error:
+        raise SpecialistError(str(error)) from error
+
+
+def _validate_clare(data, characters):
+    dossiers = data.get("dossiers")
+    if not isinstance(dossiers, list):
+        raise SpecialistError("Clare returned no character dossiers.")
+    expected = {item["suggested_id"] for item in characters}
+    received = {str(item.get("character_id") or "") for item in dossiers if isinstance(item, dict)}
+    missing = expected - received
+    if missing:
+        raise SpecialistError("Clare did not cover every proposed character: " + ", ".join(sorted(missing)))
+    required = ("character_id", "identity_lock", "base_wardrobe", "visibility_rules", "drift_risks")
+    for dossier in dossiers:
+        if not isinstance(dossier, dict) or any(not str(dossier.get(key) or "").strip() for key in required):
+            raise SpecialistError("Clare returned an incomplete dossier. Identity, wardrobe, visibility, and drift risks are all required.")
+    return data
+
+
+def clare_character_costume(provider, plan, source_text="", era=""):
+    """Create a reusable casting and costume dossier from Harry's call sheet."""
+    characters = [item for item in (plan or {}).get("items", []) if item.get("kind") == "CHARACTER"]
+    shots = [item for item in (plan or {}).get("items", []) if item.get("kind") == "SHOT"]
+    if not characters:
+        raise SpecialistError("Clare needs at least one CHARACTER proposal before she can cast the production.")
+
+    system = """You are Clare, the casting and costume designer for an AI film production.
+You are warmly exacting and protective of what is on-model. You turn a director's broad character ideas into repeatable screen identity without over-designing the story.
+
+NON-NEGOTIABLES:
+1. A physical identity lock cannot change between shots unless the story explicitly calls for a recognizable transformation.
+2. Wardrobe and surface state evolve from a base; damage, dirt, wetness, and fatigue are states, never new designs.
+3. A costume note must honor the stated era and never introduce anachronistic materials or technology.
+4. Visibility guidance must respect the shot's framing and never prescribe body detail the camera cannot see.
+5. Character distinctions must remain readable in silhouette, material, and one or two signature details.
+6. Do not invent named protagonists, major wardrobe changes, or central roles without support in the source/call sheet.
+7. Flag likely generative drift before it reaches a render.
+
+Return JSON only:
+{
+  "persona": "Clare",
+  "dossiers": [{
+    "character_id": "CHARACTER:name",
+    "character_name": "...",
+    "identity_lock": "physical/silhouette/color/feature constraints that never drift",
+    "base_wardrobe": "period-appropriate base costume or natural appearance treatment",
+    "wardrobe_states": [{"beat":"...", "state":"...", "change_reason":"..."}],
+    "visibility_rules": "what framing may reveal or must avoid",
+    "drift_risks": "specific likely model failures and prevention",
+    "hard_rejects": ["...", "..."]
+  }],
+  "shot_notes": [{
+    "shot_id":"...",
+    "cast":"character IDs visible or absent",
+    "wardrobe_state":"the relevant Clare state",
+    "visibility_note":"framing-specific constraint"
+  }]
+}"""
+    payload = {
+        "era": era,
+        "source_excerpt": (source_text or "")[:6000],
+        "characters": characters,
+        "coverage": shots,
+    }
+    try:
+        output = _json(harry._chat(provider, system, json.dumps(payload, indent=2)))
+    except harry.HarryError as error:
+        raise SpecialistError(str(error)) from error
+    output = _validate_clare(output, characters)
+    output["created_at"] = _now()
+    output["status"] = "ready"
+    return output
+
+
+def save_dossier(library_dir, dossier):
+    root = Path(library_dir) / "specialists"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "clare_character_costume.json"
+    path.write_text(json.dumps(dossier, indent=2), encoding="utf-8")
+    return path
+
+
+def load_dossier(library_dir):
+    path = Path(library_dir) / "specialists" / "clare_character_costume.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
