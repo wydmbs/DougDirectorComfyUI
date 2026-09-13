@@ -620,6 +620,17 @@ def _validate_shot_directions(items):
         raise HarryError("The amendment returned incomplete coverage direction: " + ", ".join(missing[:4]))
 
 
+def _proposal_order(item):
+    kind_order = {"CHARACTER": 0, "BACKDROP": 1, "PROP": 2, "SHOT": 3}
+    suggested_id = str(item.get("suggested_id") or "")
+    if item.get("kind") != "SHOT":
+        return kind_order.get(item.get("kind"), 9), 0, (), suggested_id.lower()
+    parts = []
+    for token in re.findall(r"\d+|[a-z]+", suggested_id.lower()):
+        parts.append((0, int(token)) if token.isdigit() else (1, token))
+    return kind_order["SHOT"], 0, tuple(parts), suggested_id.lower()
+
+
 def _merge_revision(plan, updates, additions, summary, questions):
     existing = [dict(item) for item in (plan or {}).get("items", [])]
     by_id = {item.get("suggested_id"): index for index, item in enumerate(existing) if item.get("suggested_id")}
@@ -636,6 +647,7 @@ def _merge_revision(plan, updates, additions, summary, questions):
         existing.append(item)
         if key:
             by_id[key] = len(existing) - 1
+    existing.sort(key=_proposal_order)
     _validate_shot_directions(existing)
     revised = dict(plan or {})
     revised["items"] = existing
@@ -644,76 +656,93 @@ def _merge_revision(plan, updates, additions, summary, questions):
     return revised
 
 
-def revise_plan(provider, plan, feedback, source_excerpt="", on_progress=None):
-    """Apply feedback as a compact delta, never a full call-sheet rewrite.
+def _terms(value):
+    return {word for word in re.findall(r"[a-z0-9]{3,}", (value or "").lower()) if word not in {"about", "after", "against", "and", "are", "but", "for", "from", "into", "its", "not", "only", "our", "that", "the", "this", "they", "with", "would"}}
 
-    Large full-sheet rewrites were truncating at the provider output limit and
-    producing malformed JSON. The model now returns only changed proposals and
-    additions; deterministic merge code preserves every unaffected proposal.
-    """
+
+def _amendment_context(plan, feedback, source_excerpt, selected_ids=None):
+    """Return only the live records needed for one grounded amendment."""
+    items = [dict(item) for item in (plan or {}).get("items", [])]
+    terms = _terms(feedback) | _terms(source_excerpt)
+    scored = []
+    for index, item in enumerate(items):
+        text = " ".join(str(item.get(field) or "") for field in ("kind", "name", "suggested_id", "description", "continuity_note", "beat", "reused_from"))
+        score = len(terms & _terms(text))
+        if score:
+            scored.append((score, index, item))
+    selected = {value for value in (selected_ids or []) if value}
+    by_id = {item.get("suggested_id"): item for item in items}
+    unknown = selected - set(by_id)
+    if unknown:
+        raise HarryError("The selected amendment proposal no longer exists: " + ", ".join(sorted(unknown)))
+    relevant = [by_id[value] for value in selected if value in by_id]
+    if not relevant:
+        relevant = [item for _, _, item in sorted(scored, key=lambda row: (-row[0], row[1]))[:4]]
+    if not relevant:
+        relevant = items[:2]
+    fields = ("kind", "name", "suggested_id", "description", "continuity_note", "positive_prompt", "negative_prompt", "beat", "reused_from", "camera_direction", "lighting_direction")
+    compact = [{field: item.get(field, "") for field in fields} for item in relevant]
+    index = [{"suggested_id": item.get("suggested_id", ""), "kind": item.get("kind", ""), "name": item.get("name", ""), "beat": item.get("beat", "")} for item in items]
+    return compact, index
+
+
+def revise_plan(provider, plan, feedback, source_excerpt="", selected_ids=None, on_progress=None):
+    """Apply one grounded, scoped patch without resubmitting the call sheet."""
     feedback = (feedback or "").strip()
     if not feedback:
         raise HarryError("Give Harry The Helper a specific note before asking for a revision.")
+    context = (source_excerpt or "").strip()
+    relevant, proposal_index = _amendment_context(plan, feedback, context, selected_ids)
     system = f"""{HARRY_PERSONA}
-You are revising an existing film-production call sheet after a director's note.
-Return a COMPACT DELTA ONLY. Do not repeat unchanged proposals.
+You are applying one fresh, narrow amendment to an established production baseline.
+The director's selected script passage is the grounding evidence. Treat it as a complete local production review: identify all characters, character states, backdrops, props, and coverage the passage needs to be filmable. Do not revisit or reinterpret unrelated story moments.
 
 Rules:
-- updates may modify only an existing suggested_id from the current sheet.
-- additions are new proposals required by the note.
-- Preserve all unaffected proposals; the application merges the delta.
-- For every new or amended SHOT, camera_direction and lighting_direction are mandatory.
-- camera_direction names framing, movement, and focal action.
-- lighting_direction names time, source, contrast, and emotional mood.
-- For logistics such as moving crates between country and dockyard, add the recurring PROP and coverage needed to make it filmable and era-appropriate.
+- The baseline is already approved. Everything not returned stays exactly as it is.
+- Amend any existing proposal directly required by the selected passage. Use the full call-sheet index to find its ID.
+- Add a character, backdrop, prop, character state, or shot whenever the selected passage requires one that the baseline does not adequately cover.
+- Use judgment: amend a continuing asset when its identity remains the same; add a distinct proposal when the passage introduces a new asset or a materially distinct filmable state.
+- New SHOT IDs must preserve chronological order. For example, additions after 2.1 and before 2.2 must be named 2.1a, 2.1b, then 2.1c.
+- Do not change the production summary or clarification questions.
+- For every new or amended SHOT, camera_direction and lighting_direction are required.
 {ERA_NOTE}
 
 Return JSON only:
 {{
-  "summary": "revised one-sentence production reading",
-  "questions": [],
   "updates": [{{"kind":"...", "suggested_id":"existing ID", "name":"...", "description":"...", "continuity_note":"...", "positive_prompt":"...", "negative_prompt":"...", "beat":"...", "reused_from":"...", "camera_direction":"for SHOT", "lighting_direction":"for SHOT"}}],
   "additions": [{{"kind":"CHARACTER|BACKDROP|PROP|SHOT", "suggested_id":"new valid ID", "name":"...", "description":"...", "continuity_note":"...", "positive_prompt":"...", "negative_prompt":"...", "beat":"...", "reused_from":"", "camera_direction":"for SHOT", "lighting_direction":"for SHOT"}}]
 }}"""
-    context = (source_excerpt or "").strip()
-    context_note = "\n\nSCRIPT CONTEXT SELECTED BY THE DIRECTOR:\n" + context if context else ""
-    current_items = (plan or {}).get("items", [])
-    user = "CURRENT PROPOSALS (for ID lookup only):\n" + json.dumps(current_items, indent=2) + context_note + "\n\nDIRECTOR FEEDBACK:\n" + feedback + "\n\nReturn the compact amendment delta now."
-
+    user = "DIRECTOR NOTE:\n" + feedback
+    if context:
+        user += "\n\nSELECTED SCRIPT PASSAGE (grounding evidence):\n" + context
+    user += "\n\nRELEVANT BASELINE PROPOSALS (the only existing proposals you may amend):\n" + json.dumps(relevant, separators=(",", ":"))
+    user += "\n\nCALL-SHEET ID INDEX (lookup only; do not amend these unless they are listed above):\n" + json.dumps(proposal_index, separators=(",", ":"))
+    user += "\n\nReturn the scoped patch only."
     raw = ""
-    def request(recovery=False):
-        nonlocal raw
-        prompt = user
-        if recovery:
-            prompt += "\n\nRECOVERY FORMAT: Your prior response was malformed. Return valid compact JSON only. Limit additions plus updates to the proposals touched by the feedback. No markdown or prose outside JSON."
-        raw = _chat(provider, system, prompt)
+    try:
+        if on_progress:
+            on_progress("Harry The Helper is applying a focused amendment to the selected passage.")
+        raw = _chat(provider, system, user)
         data = _parse_json_block(raw)
         if not isinstance(data, dict):
             raise HarryError("Harry returned an unusable amendment object.")
         updates = _clean_items(data.get("updates", []))
         additions = _clean_items(data.get("additions", []))
-        return _merge_revision(plan, updates, additions, data.get("summary"), data.get("questions"))
-
-    try:
+        allowed = {item.get("suggested_id") for item in (plan or {}).get("items", [])}
+        unexpected = [item.get("suggested_id") for item in updates if item.get("suggested_id") not in allowed]
+        if unexpected:
+            raise HarryError("Harry tried to amend outside the selected scope: " + ", ".join(unexpected))
+        revised = _merge_revision(plan, updates, additions, None, None)
+    except HarryRateLimitError:
         if on_progress:
-            on_progress("Harry The Helper is mapping your feedback against the active proposals.")
-        revised = request()
-    except HarryError as first_error:
-        _write_analysis_diagnostic("Director feedback first attempt", first_error, raw)
-        if on_progress:
-            on_progress("The first amendment response was malformed. Harry The Helper is retrying a compact revision.")
-        try:
-            revised = request(recovery=True)
-        except HarryError as retry_error:
-            _write_analysis_diagnostic("Director feedback retry", retry_error, raw)
-            raise HarryError(
-                "Harry The Helper could not apply this amendment after two attempts. "
-                "The active call sheet was left unchanged. "
-                f"First attempt: {first_error}. Retry: {retry_error}"
-            ) from retry_error
+            on_progress("Amendment paused: the provider is rate limiting requests. No retry was sent.")
+        raise
+    except HarryError as error:
+        _write_analysis_diagnostic("Director feedback", error, raw)
+        raise HarryError("Harry The Helper could not apply this focused amendment. The active call sheet was left unchanged. " + str(error)) from error
     if on_progress:
-        changed = len(revised.get("items", [])) - len(current_items)
-        on_progress("Amendment complete: " + (str(changed) + " new proposal(s) added." if changed else "existing proposals updated without adding new ones."))
+        changed = len(revised.get("items", [])) - len((plan or {}).get("items", []))
+        on_progress("Focused amendment complete: " + (str(changed) + " new proposal(s) added." if changed else "only the selected proposals were updated."))
     revised.update({"plan_id": datetime.now().strftime("%Y%m%d_%H%M%S"), "title": (plan or {}).get("title", "Untitled project"), "provider": provider, "era": (plan or {}).get("era", ""), "created_at": _timestamp(), "source_path": (plan or {}).get("source_path", "")})
     LIBRARY_DIR.mkdir(exist_ok=True)
     (LIBRARY_DIR / f"plan_{revised['plan_id']}.json").write_text(json.dumps(revised, indent=2), encoding="utf-8")
