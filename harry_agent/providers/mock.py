@@ -25,7 +25,7 @@ class MockProvider(Provider):
         self.calls = []
         self._ids = itertools.count(1)
 
-    def complete(self, system: str, messages: list, tools=None, max_tokens: int = 4096) -> Turn:
+    def complete(self, system: str, messages: list, tools=None, max_tokens: int = 16384) -> Turn:
         self.calls.append({"system": system, "messages": list(messages), "tools": tools})
         if not self.script:
             return Turn(text="Nothing left to do.", stop_reason=STOP_END_TURN)

@@ -184,15 +184,15 @@ def _chat(provider, system_prompt, user_prompt):
         endpoint = azure["endpoint"]
         url = f"{endpoint}/openai/v1/chat/completions"
         response = _request(url, {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, {
-            "model": azure["deployment"], "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 5000,
+            "model": azure["deployment"], "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "max_completion_tokens": 65536,
         })
         return response["choices"][0]["message"]["content"]
     if provider == "Claude":
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise HarryError("ANTHROPIC_API_KEY is not available to this app process.")
-        response = _request("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, {
-            "model": os.environ.get("HARRY_CLAUDE_MODEL", "claude-sonnet-4-5"), "max_tokens": 5000,
+        response = _request("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-beta": "output-128k-2025-02-19", "content-type": "application/json"}, {
+            "model": os.environ.get("HARRY_CLAUDE_MODEL", "claude-sonnet-4-5"), "max_tokens": 32000,
             "system": system_prompt, "messages": [{"role": "user", "content": user_prompt}],
         })
         return "".join(block.get("text", "") for block in response.get("content", []) if block.get("type") == "text")

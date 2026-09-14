@@ -47,7 +47,7 @@ class AnthropicProvider(Provider):
         self.model = model or os.environ.get("HARRY_CLAUDE_MODEL", "claude-sonnet-4-5")
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
 
-    def complete(self, system, messages, tools=None, max_tokens=4096) -> Turn:
+    def complete(self, system, messages, tools=None, max_tokens=16384) -> Turn:
         if not self.api_key:
             raise ProviderError("ANTHROPIC_API_KEY is not available to this app process.")
         payload = {
@@ -61,6 +61,7 @@ class AnthropicProvider(Provider):
         body = _post(
             "https://api.anthropic.com/v1/messages",
             {"x-api-key": self.api_key, "anthropic-version": "2023-06-01",
+             "anthropic-beta": "output-128k-2025-02-19",
              "content-type": "application/json"},
             payload,
         )
@@ -137,7 +138,7 @@ class OpenAICompatibleProvider(Provider):
                               "parameters": t.get("input_schema", {"type": "object", "properties": {}})}}
                 for t in tools or []]
 
-    def complete(self, system, messages, tools=None, max_tokens=4096) -> Turn:
+    def complete(self, system, messages, tools=None, max_tokens=65536) -> Turn:
         if not self.api_key:
             raise ProviderError(f"No API key is available for {self.name}.")
         payload = {
@@ -191,7 +192,7 @@ class OllamaProvider(Provider):
         self.model = model or os.environ.get("HARRY_OLLAMA_MODEL", "qwen2.5:7b")
         self.url = (url or os.environ.get("HARRY_OLLAMA_URL", "http://127.0.0.1:11434")).rstrip("/")
 
-    def complete(self, system, messages, tools=None, max_tokens=4096) -> Turn:
+    def complete(self, system, messages, tools=None, max_tokens=16384) -> Turn:
         system_prompt = system
         if tools:
             catalogue = "\n".join(

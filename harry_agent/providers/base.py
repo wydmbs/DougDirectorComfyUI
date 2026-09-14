@@ -47,7 +47,7 @@ class Provider:
     supports_vision = False
 
     def complete(self, system: str, messages: list, tools: Optional[list] = None,
-                 max_tokens: int = 4096) -> Turn:
+                 max_tokens: int = 16384) -> Turn:
         """Send a conversation and return one turn.
 
         `messages` uses the Anthropic content-block shape as the internal
