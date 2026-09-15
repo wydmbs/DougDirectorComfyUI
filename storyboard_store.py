@@ -7,6 +7,7 @@ narration timing rows. Re-locking an asset or panel updates its row and
 appends to its decision log.
 """
 
+import json
 import os
 from datetime import datetime, timezone
 
@@ -24,6 +25,7 @@ ASSETS_COLUMNS = [
     # sheet rather than a second tracking file, per SUITE.md rule 1: the video
     # module extends the registry, it does not fork it.
     "keyframe_path", "clip_path", "motion_prompt", "video_model", "shot_type",
+    "clare_status", "clare_character_json", "clare_checked_at",
 ]
 
 PANELS_SHEET = "Panels"
@@ -39,7 +41,9 @@ BEATS_SHEET = "Beats"
 BEATS_COLUMNS = ["order", "beat", "start_s", "end_s", "duration_s", "source", "notes"]
 
 CHARACTERS_SHEET = "Characters"
-CHARACTERS_COLUMNS = ["trigger_id", "display_name", "working_note", "created_at", "updated_at"]
+CHARACTERS_COLUMNS = [
+    "trigger_id", "display_name", "working_note", "identity_lock_json", "created_at", "updated_at",
+]
 
 
 def _open_or_create_workbook(path: str) -> Workbook:
@@ -240,6 +244,32 @@ def set_shot_plan(path: str, entry_id: str, shot_type: str, video_model: str,
         "video_model": video_model,
         "motion_prompt": motion_prompt or None,
     }, note or f"routed to {video_model}")
+
+
+def set_clare_result(path: str, entry_id: str, status: str, character_blocks: list,
+                     notes: str, checked_at: str, prompt_positive: str = "") -> None:
+    if status not in {"pending", "approved", "flagged", "rejected"}:
+        raise ValueError(f"Invalid Clare status: {status}")
+    _update_asset_fields(path, entry_id, {
+        "clare_status": status,
+        "clare_character_json": json.dumps(character_blocks, sort_keys=True),
+        "clare_checked_at": checked_at,
+        "prompt_positive": prompt_positive or None,
+    }, notes or f"Clare marked shot {status}")
+
+
+def set_character_identity_lock(path: str, trigger_id: str, identity_lock: dict) -> None:
+    with registry_lock(path):
+        trigger_id = _require_character_trigger(trigger_id)
+        workbook = _open_or_create_workbook(path)
+        worksheet = _ensure_sheet(workbook, CHARACTERS_SHEET, CHARACTERS_COLUMNS)
+        row = _find_row(worksheet, _col_index(worksheet, "trigger_id"), trigger_id)
+        if row is None:
+            raise ValueError(f"{trigger_id} does not exist.")
+        worksheet.cell(row, _col_index(worksheet, "identity_lock_json"),
+                       json.dumps(identity_lock, sort_keys=True))
+        worksheet.cell(row, _col_index(worksheet, "updated_at"), _timestamp())
+        save_workbook_atomic(workbook, path)
 
 
 def list_panels(path: str, entry_id: str) -> list:
