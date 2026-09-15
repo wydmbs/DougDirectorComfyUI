@@ -1,5 +1,7 @@
 """Harry the Advisor: source analysis, provider calls, and editable Build drafts."""
 
+import base64
+import io
 import json
 import os
 import re
@@ -7,6 +9,8 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from PIL import Image, ImageOps
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -217,6 +221,53 @@ def _chat(provider, system_prompt, user_prompt):
         "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "format": "json",
     })
     return response["message"]["content"]
+
+
+def _chat_with_images(provider, system_prompt, user_prompt, images):
+    image_parts = []
+    for image in images:
+        path = image.get("path")
+        if not path:
+            continue
+        try:
+            raw = Path(path).read_bytes()
+            if len(raw) > 20 * 1024 * 1024:
+                raise HarryError("A character reference exceeds the 20 MB upload limit.")
+            with Image.open(io.BytesIO(raw)) as opened:
+                picture = ImageOps.exif_transpose(opened).convert("RGB")
+                picture.thumbnail((1600, 1600))
+                output = io.BytesIO()
+                picture.save(output, format="JPEG", quality=85, optimize=True)
+            encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        except OSError as error:
+            raise HarryError("Could not read a character reference image: " + str(error)) from error
+        except Image.UnidentifiedImageError as error:
+            raise HarryError("A character reference is not a readable image.") from error
+        image_parts.append((image.get("role") or "Reference image", "data:image/jpeg;base64," + encoded))
+    if not image_parts:
+        return _chat(provider, system_prompt, user_prompt)
+    if provider == "Azure OpenAI":
+        azure = _azure_settings()
+        if not azure["key"]:
+            raise HarryError("Azure API key is not available to this app process. Set %s and restart the app." % azure["key_env"])
+        if not azure["endpoint"] or not azure["deployment"]:
+            raise HarryError("Azure endpoint and deployment are not configured yet -- fill them in on the Setup tab.")
+        content = [{"type": "text", "text": user_prompt}]
+        for role, data_url in image_parts:
+            content.extend(({"type": "text", "text": "Reference role: " + role}, {"type": "image_url", "image_url": {"url": data_url}}))
+        response = _request(azure["endpoint"] + "/openai/v1/chat/completions", {"Authorization": "Bearer " + azure["key"], "Content-Type": "application/json"}, {"model": azure["deployment"], "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": content}], "max_completion_tokens": 65536})
+        return response["choices"][0]["message"]["content"]
+    if provider == "Claude":
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise HarryError("ANTHROPIC_API_KEY is not available to this app process.")
+        content = [{"type": "text", "text": user_prompt}]
+        for role, data_url in image_parts:
+            media_type, encoded = data_url.split(";base64,", 1)
+            content.extend(({"type": "text", "text": "Reference role: " + role}, {"type": "image", "source": {"type": "base64", "media_type": media_type.removeprefix("data:"), "data": encoded}}))
+        response = _request("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-beta": "output-128k-2025-02-19", "content-type": "application/json"}, {"model": os.environ.get("HARRY_CLAUDE_MODEL", "claude-sonnet-4-5"), "max_tokens": 32000, "system": system_prompt, "messages": [{"role": "user", "content": content}]})
+        return "".join(block.get("text", "") for block in response.get("content", []) if block.get("type") == "text")
+    return _chat(provider, system_prompt, user_prompt + "\nReference image roles: " + ", ".join(role for role, _ in image_parts))
 
 
 def _parse_json_block(raw):

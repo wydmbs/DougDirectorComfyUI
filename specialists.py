@@ -5,6 +5,7 @@ constraints with structured, inspectable outputs.
 """
 
 import json
+import mimetypes
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -95,6 +96,25 @@ Return JSON only:
     output["created_at"] = _now()
     output["status"] = "ready"
     return output
+
+
+def clare_character_brief(provider, character, director_note, references):
+    system = """You are Clare, a casting and costume director helping a filmmaker develop one AI-film character. Be practical, imaginative and exacting. Build from the supplied story role and director's own words; do not replace them with generic film-design language. Treat reference images as evidence about the requested aspect, never as subjects to copy.
+
+Return JSON only with: identity_direction, wardrobe_direction, sheet_plan, drift_risks, questions (a short list of specific questions that would improve the next character pass)."""
+    payload = {"character": character, "director_note": director_note, "references": [{"name": item.get("name"), "role": item.get("role")} for item in references]}
+    images = [{"path": item.get("path"), "role": item.get("role"), "media_type": mimetypes.guess_type(item.get("path") or "")[0] or "image/jpeg"} for item in references]
+    try:
+        brief = _json(harry._chat_with_images(provider, system, json.dumps(payload, indent=2), images))
+    except harry.HarryError as error:
+        raise SpecialistError(str(error)) from error
+    required = ("identity_direction", "wardrobe_direction", "sheet_plan", "drift_risks")
+    if not isinstance(brief, dict) or any(not str(brief.get(key) or "").strip() for key in required):
+        raise SpecialistError("Clare returned an incomplete character brief. Please try again.")
+    questions = brief.get("questions", [])
+    brief["questions"] = [str(question) for question in questions] if isinstance(questions, list) else []
+    brief["created_at"] = _now()
+    return brief
 
 
 def save_dossier(library_dir, dossier):

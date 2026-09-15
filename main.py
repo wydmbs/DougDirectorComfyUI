@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Form, UploadFile, File, HTTPException
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -119,7 +119,9 @@ def clare_handoff_path(project_id: str):
 def save_clare_handoff(project_id: str, record: dict):
     characters = [item for item in record.get("plan", {}).get("items", []) if item.get("kind") == "CHARACTER"]
     payload = {"plan_id": record.get("plan_id", ""), "run_version": record.get("run_version", ""), "title": record.get("plan", {}).get("title", ""), "characters": characters}
-    clare_handoff_path(project_id).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path = clare_handoff_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return payload
 
 
@@ -148,7 +150,9 @@ def load_clare_development(project_id: str):
 
 
 def save_clare_development(project_id: str, state: dict):
-    clare_development_path(project_id).write_text(json.dumps(state, indent=2), encoding="utf-8")
+    path = clare_development_path(project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
 
 
 def clare_reference_dir(project_id: str):
@@ -163,34 +167,55 @@ def clare_scene_options(handoff):
     return {item.get("suggested_id"): item for item in shots}
 
 
+def clare_brief_value(value):
+    if isinstance(value, dict):
+        rows = "".join('<div class="clare-brief-row"><b>' + esc(str(key).replace("_", " ")) + '</b><div>' + clare_brief_value(item) + '</div></div>' for key, item in value.items())
+        return '<div class="clare-brief-fields">' + rows + '</div>'
+    if isinstance(value, list):
+        return '<ul>' + ''.join('<li>' + clare_brief_value(item) + '</li>' for item in value) + '</ul>'
+    return '<p>' + esc(value) + '</p>'
+
+
+def clare_brief_section(title, value):
+    return '<article class="clare-brief-section"><h4>' + esc(title) + '</h4>' + clare_brief_value(value) + '</article>'
+
+
 def clare_workspace_fragment(handoff, dossier=None):
     current = current_cfg()
     state = load_clare_development(current.active_project_id)
-    look = state.get("look", {})
-    status = state.get("look_status", "draft")
-    scenes = clare_scene_options(handoff)
-    selected_scenes = state.get("test_scene_ids") or ["2.1c", "4.4"]
-    selected_scenes = [scene for scene in selected_scenes if scene in scenes]
-    if len(selected_scenes) < 2:
-        selected_scenes = list(scenes)[:2]
-    references = state.get("references", [])
-    scene_options = "".join('<option value="' + esc(scene_id) + '"' + (' selected' if scene_id in selected_scenes else '') + '>' + esc(scene_id + " - " + scenes[scene_id].get("name", "")) + '</option>' for scene_id in scenes)
-    ref_rows = "".join('<li><b>' + esc(reference.get("name")) + '</b><span>' + esc(reference.get("role")) + '</span></li>' for reference in references) or '<li>No references yet. You can start with words alone.</li>'
-    ready = status == "test-ready"
-    locked = status == "locked"
-    status_pill = pill("Look Lock " + state.get("look_version", "v1"), "done") if locked else pill("Test board ready" if ready else "Start here", "active")
-    stage_one = '<section class="clare-stage"><div class="clare-stage-head"><div><span class="panel-kicker">STAGE 1: DESIGN THE FILM LOOK</span><h2>Tell Clare what you want the movie to feel like.</h2><p>Use ordinary language and images you like. Clare turns that into an original visual recipe; you judge paired real-scene tests.</p></div>' + status_pill + '</div><form hx-post="/clare/look/brief" hx-target="#clare-workspace" class="clare-form"><label>YOUR VISION FOR THE MOVIE<textarea name="vision" rows="4" placeholder="For example: a heartfelt funny old storybook voyage. Safe and warm at the farm, dark and stormy at sea, then glowing and hopeful on the island.">' + esc(look.get("vision", "")) + '</textarea><small>Optional: Clare has already read the storyboard’s farm, storm, open-sea and island progression.</small></label><label>ANY EXTRA GUIDANCE<textarea name="guidance" rows="3" placeholder="Anything you especially want more or less of. You can write: more handmade, less clean, warmer island ending, quieter comedy.">' + esc(look.get("guidance", "")) + '</textarea></label><div class="clare-actions"><button>Save my direction</button><span>Next, add images and choose two storyboard scenes for a whole-film style test.</span></div></form><div class="clare-reference-area"><div><span class="eyebrow">SHOW CLARE IMAGES YOU LIKE</span><h3>Reference evidence, made simple</h3><p>Clare will interpret the image. You only choose what you like about it.</p></div><form hx-post="/clare/look/reference" hx-encoding="multipart/form-data" hx-target="#clare-workspace" class="clare-upload"><input type="file" name="reference_file" accept="image/*" required><select name="role"><option value="Overall feeling">I like this overall</option><option value="Feeling not subject">Use the feeling, not the subject</option><option value="Color">Use the color</option><option value="Drawing and paint">Use the drawing and paint treatment</option><option value="Scene staging">Use the scene staging</option><option value="Avoid">Avoid this aspect</option></select><button>Add reference</button></form><ul class="clare-reference-list">' + ref_rows + '</ul></div></section>'
-    test_stage = '<section class="clare-stage"><div class="clare-stage-head"><div><span class="panel-kicker">STAGE 2: PROVE THE LOOK ON THE FILM</span><h2>Test one visual proposition against two real scenes.</h2><p>A direction must work for the whole ask, not just a pretty isolated image.</p></div>' + (pill("Ready", "active") if look.get("vision") or references else pill("Add a thought or image first", "slate")) + '</div><form hx-post="/clare/look/test-plan" hx-target="#clare-workspace" class="clare-form"><div class="clare-fields"><label>SCENE ONE<select name="scene_one">' + scene_options + '</select></label><label>SCENE TWO<select name="scene_two">' + scene_options + '</select></label></div><div class="clare-test-context"><article><b>Recommended first test</b><p>Capture-to-cart proves animals, anonymous workers, crates, horse, cart, dock and comic restraint.</p></article><article><b>Recommended second test</b><p>Storm hull-snap proves ship identity, weather, lighting, story stakes and handmade treatment.</p></article></div><div class="clare-actions"><button>Prepare 5 paired test variants</button><span>Each variant keeps the scenes fixed and changes the whole visual recipe, not one isolated attribute.</span></div></form>'
-    if ready or locked:
-        names = ["Balanced original hybrid", "More handmade ink", "Richer watercolor release", "Denser story staging", "Quieter storybook clarity"]
-        cards = []
-        for index, name in enumerate(names, start=1):
-            cards.append('<article class="clare-test-card"><span class="eyebrow">VARIANT ' + str(index) + '</span><h3>' + name + '</h3><p>' + esc(scenes[selected_scenes[0]].get("name", "Scene one")) + '</p><p>' + esc(scenes[selected_scenes[1]].get("name", "Scene two")) + '</p><small>Paired ComfyUI test package: same story requirements, original recipe variation.</small></article>')
-        test_stage += '<div class="clare-test-board">' + ''.join(cards) + '</div><div class="clare-actions"><button disabled>Generate paired tests in ComfyUI</button><span>Test packages are ready. Generation unlocks when the local render engine is available.</span></div>'
-    test_stage += '</section>'
-    cast_gate = '<section class="clare-stage gated"><div class="clare-stage-head"><div><span class="panel-kicker">STAGE 3: CHARACTER DEVELOPMENT</span><h2>Choose the first character after the production look is approved.</h2><p>Harry’s detailed cast is waiting. Character variants, costume states and reference sheets come after the cross-scene look lock.</p></div>' + pill("Awaiting style approval", "slate") + '</div><div class="clare-sheet-preview"><span>Pig</span><span>Rooster</span><span>States</span><span>Variants</span><span>Character sheet</span></div></section>'
-    dossier_html = clare_fragment(dossier) if dossier else ""
-    return '<section class="clare-journey"><div class="run-control"><div><span class="panel-kicker">CLARE VISUAL DEVELOPMENT</span><h2>' + esc(handoff.get("title")) + '</h2><small>Start by proving an original production look on real storyboard scenes. Character selection comes next.</small></div>' + pill("Guided build", "active") + '</div>' + stage_one + test_stage + cast_gate + dossier_html + '</section>'
+    selected_character = state.get("selected_character", "")
+    characters = handoff.get("characters", [])
+    selected = next((item for item in characters if str(item.get("suggested_id")) == selected_character), None)
+    cast_cards = []
+    for character in characters:
+        character_id = str(character.get("suggested_id") or "")
+        chosen = character_id == selected_character
+        cast_cards.append('<button name="character_id" value="' + esc(character_id) + '" class="' + ('selected' if chosen else '') + '"><span>' + esc(character_id) + '</span><b>' + esc(character.get("name")) + '</b><small>' + esc(character.get("description")) + '</small>' + ('<em>Developing now</em>' if chosen else '') + '</button>')
+    picker = '<form hx-post="/clare/character/select" hx-target="#clare-workspace" class="clare-character-picker">' + ''.join(cast_cards) + '</form>' if cast_cards else '<p class="clare-cast-empty">No character cards were included in this Harry run.</p>'
+    cast_stage = '<section class="clare-stage clare-cast-stage"><div class="clare-stage-head"><div><span class="panel-kicker">IMPORTED CAST</span><h2>Choose the character Clare develops first.</h2><p>Harry has established the story roles. Clare now helps you make one character unmistakable before any scene or shot is designed.</p></div>' + pill("Character first", "active") + '</div>' + picker + '</section>'
+    if not selected:
+        character_stage = '<section class="clare-stage"><div class="clare-stage-head"><div><span class="panel-kicker">CHARACTER CONVERSATION</span><h2>Choose a character above to begin.</h2><p>Then tell Clare what you want to preserve, change, exaggerate or avoid. You can add reference images as part of the same conversation.</p></div></div></section>'
+    else:
+        references = [item for item in state.get("character_references", []) if item.get("character_id") == selected_character]
+        reference_rows = ''.join('<li><b>' + esc(item.get("name")) + '</b><span>' + esc(item.get("role")) + '</span></li>' for item in references) or '<li>No character references yet — words are a good first move.</li>'
+        brief = state.get("character_briefs", {}).get(selected_character)
+        brief_html = ''
+        if brief:
+            sections = ''.join((clare_brief_section("Identity direction", brief.get("identity_direction")), clare_brief_section("Costume and surface direction", brief.get("wardrobe_direction")), clare_brief_section("Character-sheet plan", brief.get("sheet_plan")), clare_brief_section("Protect against drift", brief.get("drift_risks"))))
+            questions = brief.get("questions", [])
+            question_fields = ''.join('<label><span>' + esc(question) + '</span><textarea name="answer_' + str(index) + '" rows="3" placeholder="Your answer for Clare"></textarea></label>' for index, question in enumerate(questions))
+            question_form = '<form id="clare-question-form" hx-post="/clare/character/questions" hx-target="#clare-workspace" hx-indicator="#clare-question-loading" class="clare-questions"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><h4>Clare needs your answers</h4><p>Answer only what helps. Clare will fold your replies into the next version of this character brief.</p>' + question_fields + '<div class="clare-actions"><button>Send answers to Clare</button><span id="clare-question-loading" class="htmx-indicator">Clare is refining the character brief…</span></div></form>' if questions else ''
+            trials = state.get("character_trials", {}).get(selected_character)
+            trial_html = ''
+            if trials:
+                cards = ''.join('<article class="clare-test-card"><span class="eyebrow">TRIAL ' + str(index) + '</span><h3>' + esc(item["name"]) + '</h3><p>' + esc(item["purpose"]) + '</p><small>Reference-sheet target: ' + esc(item["target"]) + '</small></article>' for index, item in enumerate(trials, start=1))
+                trial_html = '<section class="clare-trials"><span class="eyebrow">NEXT: REFERENCE-SHEET TRIALS</span><h3>Character trial plan prepared</h3><p>These are the first images to generate and judge before any lock. Generation remains a separate, deliberate action.</p><div class="clare-test-board">' + cards + '</div></section>'
+            else:
+                trial_html = '<section class="clare-trials"><span class="eyebrow">NEXT: REFERENCE-SHEET TRIALS</span><h3>Prepare the first character images</h3><p>When this brief feels right, prepare four deliberate reference-sheet trials: silhouette, costume, expression and full-body pose. Nothing generates until you choose to roll camera.</p><form hx-post="/clare/character/trials" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><button>Prepare character-sheet trials</button></form></section>'
+            brief_html = '<section class="clare-character-brief"><span class="eyebrow">CLARE’S CURRENT CHARACTER BRIEF</span><h3>' + esc(selected.get("name")) + '</h3><p class="clare-brief-intro">Read this as a working dossier, not a final lock. Use the answers below to correct it before preparing image trials.</p><div class="clare-brief-sections">' + sections + '</div>' + question_form + trial_html + '</section>'
+        character_stage = '<section class="clare-stage"><div class="clare-stage-head"><div><span class="panel-kicker">CHARACTER CONVERSATION: ' + esc(selected.get("suggested_id")) + '</span><h2>Talk to Clare about ' + esc(selected.get("name")) + '.</h2><p>Describe the character you want to see. Be plain and subjective: what feels right, what must not change, what feels too polished, too cute, too modern, or simply wrong.</p></div>' + pill("In development", "active") + '</div><form id="clare-character-brief-form" hx-post="/clare/character/brief" hx-target="#clare-workspace" hx-indicator="#clare-brief-loading" class="clare-form"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><label>YOUR DIRECTION FOR ' + esc(selected.get("name")).upper() + '<textarea name="director_note" rows="5" placeholder="For example: keep the Pig composed and capable, but not aristocratic. His country clothes should look practical and lived-in, never costume-shop neat. He must read clearly in silhouette."></textarea><small>This is a conversation turn, not a final prompt. Clare will return a character brief and questions for you to refine.</small></label><div class="clare-actions"><button>Ask Clare for a character brief</button><span>Clare will use Harry’s role, your direction, and the reference images below.</span><span id="clare-brief-loading" class="htmx-indicator">Clare is studying your direction and references…</span></div></form><div class="clare-reference-area"><div><span class="eyebrow">CHARACTER REFERENCES</span><h3>Show Clare images that help define ' + esc(selected.get("name")) + '.</h3><p>Tell Clare what to take from each image: silhouette, face, clothes, texture, attitude, or what to avoid. She will not copy the subject.</p></div><form hx-post="/clare/character/reference" hx-encoding="multipart/form-data" hx-target="#clare-workspace" class="clare-upload"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><input type="file" name="reference_file" accept="image/*" required><select name="role"><option value="Overall character feeling">Overall feeling</option><option value="Silhouette and shape">Silhouette and shape</option><option value="Costume and materials">Costume and materials</option><option value="Face or expression">Face or expression</option><option value="Drawing and paint treatment">Drawing and paint treatment</option><option value="Avoid">Avoid this aspect</option></select><button>Add character reference</button></form><ul class="clare-reference-list">' + reference_rows + '</ul></div>' + brief_html + '</section>'
+    later = '<details class="clare-later-stage"><summary>Later: use the approved character direction to establish the wider film look</summary><p>Once Pig or Rooster is credible on a character sheet, Clare will test that locked design against the farm, dock, storm and island scenes. Scene look follows the character lock; it does not replace it.</p></details>'
+    return '<section class="clare-journey"><div class="run-control"><div><span class="panel-kicker">CLARE: CASTING & COSTUME</span><h2>' + esc(handoff.get("title")) + '</h2><small>Build a character the audience can recognize, then use that lock to guide the rest of the film.</small></div>' + pill("Guided build", "active") + '</div>' + cast_stage + character_stage + later + '</section>'
 
 
 def coverage_checkpoint_path(project_id: str):
@@ -399,7 +424,8 @@ def call_sheet_fragment(plan: dict, source: str = "", semantic_passages=None, pe
             if item.get("kind") == "SHOT" and item.get("lighting_direction"):
                 lighting = '<div class="lighting-note"><b>Lighting</b> ' + esc(item["lighting_direction"]) + "</div>"
             scope = '<label class="amend-scope"><input form="amendment-form" type="checkbox" name="selected_ids" value="' + esc(item.get("suggested_id")) + '" data-amend-search="' + esc(" ".join(str(item.get(field) or "") for field in ("kind", "name", "suggested_id", "description", "continuity_note", "beat"))) + '"> Amend this card</label>'
-            cards.append('<article class="recommendation"><span class="eyebrow">' + esc(item.get("suggested_id")) + "</span><h3>" + esc(item.get("name")) + "</h3><p>" + esc(item.get("description")) + "</p>" + camera + lighting + "<small>" + esc(item.get("continuity_note")) + "</small>" + scope + "</article>")
+            details = '<details class="recommendation-details"><summary>Details and amend</summary><div><p>' + esc(item.get("description")) + '</p>' + camera + lighting + '<small>' + esc(item.get("continuity_note")) + '</small>' + scope + '</div></details>'
+            cards.append('<article class="recommendation"><span class="eyebrow">' + esc(item.get("suggested_id")) + "</span><h3>" + esc(item.get("name")) + "</h3>" + details + "</article>")
         sections.append('<section><div class="section-heading"><h2>' + label + "</h2>" + pill(str(len(items)) + " proposed") + '</div><div class="recommendation-grid">' + "".join(cards) + "</div></section>")
     questions = "".join("<li>" + esc(question) + "</li>" for question in plan.get("questions", []))
     question_html = "<ul class='questions'>" + questions + "</ul>" if questions else ""
@@ -643,7 +669,115 @@ async def import_cast_to_clare(plan_id: Annotated[str, Form()]):
         return '<div class="notice warn">No active Harry run is available to import.</div>'
     handoff = save_clare_handoff(current_cfg().active_project_id, record)
     event(f"Imported {len(handoff['characters'])} character record(s) into the Clare Character & Costume workspace.")
-    return '<div class="notice good">Cast imported into the Clare Character &amp; Costume workspace. Open that tab to continue.</div>'
+    return HTMLResponse(
+        '<div class="notice good">Cast imported into the Clare Character &amp; Costume workspace.</div>',
+        headers={"HX-Trigger": "open-clare"},
+    )
+
+
+@app.post("/clare/character/select", response_class=HTMLResponse)
+async def select_clare_character(character_id: Annotated[str, Form()]):
+    current = current_cfg()
+    handoff = load_clare_handoff(current.active_project_id)
+    characters = (handoff or {}).get("characters", [])
+    if not any(str(character.get("suggested_id")) == character_id for character in characters):
+        return '<div class="notice warn">Choose a character imported from Harry’s current cast.</div>'
+    state = load_clare_development(current.active_project_id)
+    state["selected_character"] = character_id
+    save_clare_development(current.active_project_id, state)
+    event("Clare queued " + character_id + " for first character development.")
+    return await current_clare()
+
+
+@app.post("/clare/character/reference", response_class=HTMLResponse)
+async def add_clare_character_reference(character_id: Annotated[str, Form()], reference_file: UploadFile = File(), role: Annotated[str, Form()] = "Overall character feeling"):
+    current = current_cfg()
+    handoff = load_clare_handoff(current.active_project_id) or {}
+    if not any(str(item.get("suggested_id")) == character_id for item in handoff.get("characters", [])):
+        return '<div class="notice warn">Choose an imported character before adding a reference.</div>'
+    suffix = Path(reference_file.filename or "").suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return '<div class="notice warn">Add a JPG, PNG or WEBP image reference.</div>'
+    destination = clare_reference_dir(current.active_project_id) / (str(random.randint(100000, 999999)) + suffix)
+    destination.write_bytes(await reference_file.read())
+    state = load_clare_development(current.active_project_id)
+    state.setdefault("character_references", []).append({"character_id": character_id, "name": reference_file.filename, "path": str(destination), "role": role})
+    save_clare_development(current.active_project_id, state)
+    event("Clare added a character reference for " + character_id + ".")
+    return await current_clare()
+
+
+@app.post("/clare/character/brief", response_class=HTMLResponse)
+async def create_clare_character_brief(character_id: Annotated[str, Form()], director_note: Annotated[str, Form()] = ""):
+    current = current_cfg()
+    handoff = load_clare_handoff(current.active_project_id) or {}
+    character = next((item for item in handoff.get("characters", []) if str(item.get("suggested_id")) == character_id), None)
+    if character is None:
+        return '<div class="notice warn">Choose an imported character before speaking with Clare.</div>'
+    if not director_note.strip():
+        return '<div class="notice warn">Tell Clare what you want for this character before asking for a brief.</div>'
+    state = load_clare_development(current.active_project_id)
+    references = [item for item in state.get("character_references", []) if item.get("character_id") == character_id]
+    try:
+        brief = await asyncio.to_thread(specialists.clare_character_brief, current.harry_provider, character, director_note, references)
+    except specialists.SpecialistError as error:
+        event("Clare could not complete the character brief: " + str(error))
+        return '<div class="notice warn">' + esc(error) + '</div>'
+    state.setdefault("character_briefs", {})[character_id] = brief
+    state.setdefault("character_notes", {}).setdefault(character_id, []).append({"director": director_note.strip(), "created_at": brief.get("created_at", "")})
+    save_clare_development(current.active_project_id, state)
+    event("Clare prepared a character brief for " + character_id + ".")
+    return await current_clare()
+
+
+@app.post("/clare/character/questions", response_class=HTMLResponse)
+async def answer_clare_questions(request: Request, character_id: Annotated[str, Form()]):
+    form = await request.form()
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    brief = state.get("character_briefs", {}).get(character_id)
+    handoff = load_clare_handoff(current.active_project_id) or {}
+    character = next((item for item in handoff.get("characters", []) if str(item.get("suggested_id")) == character_id), None)
+    if not brief or not character:
+        return '<div class="notice warn">Create a character brief before answering Clare’s questions.</div>'
+    answers = []
+    for index, question in enumerate(brief.get("questions", [])):
+        answer = str(form.get("answer_" + str(index), "")).strip()
+        if answer:
+            answers.append("Question: " + str(question) + "\nDirector answer: " + answer)
+    if not answers:
+        return '<div class="notice warn">Add at least one answer for Clare to refine the brief.</div>'
+    notes = state.get("character_notes", {}).get(character_id, [])
+    original = notes[-1].get("director", "") if notes else ""
+    direction = original + "\n\nAnswers to Clare’s questions:\n" + "\n\n".join(answers)
+    references = [item for item in state.get("character_references", []) if item.get("character_id") == character_id]
+    try:
+        refined = await asyncio.to_thread(specialists.clare_character_brief, current.harry_provider, character, direction, references)
+    except specialists.SpecialistError as error:
+        return '<div class="notice warn">' + esc(error) + '</div>'
+    state.setdefault("character_briefs", {})[character_id] = refined
+    state.setdefault("character_notes", {}).setdefault(character_id, []).append({"director": direction, "created_at": refined.get("created_at", "")})
+    state.get("character_trials", {}).pop(character_id, None)
+    save_clare_development(current.active_project_id, state)
+    event("Clare refined the character brief for " + character_id + " using your answers.")
+    return await current_clare()
+
+
+@app.post("/clare/character/trials", response_class=HTMLResponse)
+async def prepare_clare_character_trials(character_id: Annotated[str, Form()]):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    if character_id not in state.get("character_briefs", {}):
+        return '<div class="notice warn">Create and review Clare’s character brief before preparing image trials.</div>'
+    state.setdefault("character_trials", {})[character_id] = [
+        {"name": "Silhouette and material lock", "purpose": "Prove the character reads instantly at a distance.", "target": "full-body side and three-quarter standing views"},
+        {"name": "Costume and surface lock", "purpose": "Prove the clothes, natural surface and materials hold together.", "target": "full-body front view with costume-detail inset"},
+        {"name": "Expression and performance lock", "purpose": "Prove the inner character reads without human gestures.", "target": "head-and-shoulders calm, concerned and dry-amusement views"},
+        {"name": "Story-ready pose lock", "purpose": "Prove the character can carry the film’s physical world.", "target": "full-body in-context pose matching Harry’s story role"},
+    ]
+    save_clare_development(current.active_project_id, state)
+    event("Clare prepared four character-sheet reference trials for " + character_id + ".")
+    return await current_clare()
 
 
 @app.post("/clare/look/brief", response_class=HTMLResponse)
