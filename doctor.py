@@ -92,7 +92,7 @@ def check_python(report):
     section = "Python"
     report.add(section, OK, f"Python {sys.version.split()[0]}")
     missing = []
-    for module, why in (("gradio", "the app shell"), ("openpyxl", "the registry"),
+    for module, why in (("fastapi", "the app shell"), ("uvicorn", "the app server"), ("openpyxl", "the registry"),
                         ("PIL", "image handling")):
         try:
             __import__(module)
