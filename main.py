@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import html
 import json
 import os
@@ -180,9 +181,39 @@ def clare_brief_section(title, value):
     return '<article class="clare-brief-section"><h4>' + esc(title) + '</h4>' + clare_brief_value(value) + '</article>'
 
 
+def clare_trial_prompt(character, brief, trial, state):
+    identity = json.dumps(brief.get("identity_direction", {}), ensure_ascii=False)
+    wardrobe = json.dumps(brief.get("wardrobe_direction", {}), ensure_ascii=False)
+    risks = json.dumps(brief.get("drift_risks", {}), ensure_ascii=False)
+    look = state.get("look", {})
+    framing = {
+        "silhouette_material": "full-body character design sheet, side view and three-quarter standing view, ample neutral paper background",
+        "costume_surface": "full-body front-view character design sheet with a clear costume-and-material detail inset, neutral paper background",
+        "expression_performance": "head-and-shoulders expression study with calm, concerned, and dry-amusement views, neutral paper background",
+        "story_ready_pose": "full-body story-ready pose in a sparse, readable suggestion of the film world; keep the character dominant",
+    }.get(trial.get("id"), trial.get("target", "character reference sheet"))
+    return (
+        "Original hand-painted British storybook character design, expressive pen-and-ink linework and textured watercolor, "
+        "restrained whimsical and emotionally sincere, never glossy 3D, photorealistic, clean vector, or overt cartoon. "
+        f"Character: {character.get('name', '')}. Harry's story role and description: {character.get('description', '')}. "
+        f"Clare identity direction: {identity}. Clare costume and surface direction: {wardrobe}. "
+        f"Trial purpose: {trial.get('purpose', '')}. Composition: {framing}. "
+        f"Whole-film look direction: {look.get('vision', '')} {look.get('guidance', '')}. "
+        f"Protect against: {risks}. No text, labels, logos, humans, extra characters, collage panels, or frame border."
+    )
+
+
+def clare_trial_config(current):
+    trial = copy.copy(current)
+    trial.workflow_json_path = str(ROOT / "workflows" / "flux_character_trial_api.json")
+    trial.node_mapping = cfgmod.NodeMapping(positive_prompt_node="5", positive_prompt_input="text", negative_prompt_node="7", negative_prompt_input="text", seed_node="9", seed_input="seed", save_image_node="11")
+    return trial
+
+
 def clare_workspace_fragment(handoff, dossier=None):
     current = current_cfg()
     state = load_clare_development(current.active_project_id)
+    trial_variants = getattr(getattr(current, "agent", None), "variants_per_generation", 4)
     selected_character = state.get("selected_character", "")
     characters = handoff.get("characters", [])
     selected = next((item for item in characters if str(item.get("suggested_id")) == selected_character), None)
@@ -208,11 +239,60 @@ def clare_workspace_fragment(handoff, dossier=None):
             trials = state.get("character_trials", {}).get(selected_character)
             trial_html = ''
             if trials:
-                cards = ''.join('<article class="clare-test-card"><span class="eyebrow">TRIAL ' + str(index) + '</span><h3>' + esc(item["name"]) + '</h3><p>' + esc(item["purpose"]) + '</p><small>Reference-sheet target: ' + esc(item["target"]) + '</small></article>' for index, item in enumerate(trials, start=1))
-                trial_html = '<section class="clare-trials"><span class="eyebrow">NEXT: REFERENCE-SHEET TRIALS</span><h3>Character trial plan prepared</h3><p>These are the first images to generate and judge before any lock. Generation remains a separate, deliberate action.</p><div class="clare-test-board">' + cards + '</div></section>'
+                cards = []
+                for index, item in enumerate(trials, start=1):
+                    runs = item.get("runs", [])
+                    variants = runs[-1].get("variants", []) if runs else []
+                    selected_path = item.get("selected_variant", "")
+                    guide = {
+                        "silhouette_material": "Pick the take whose outline, pig anatomy and materials read instantly at thumbnail size. Reject wrong anatomy, generic mascot proportions, or costume that hides the silhouette.",
+                        "costume_surface": "Pick the take with the clearest correct costume construction, material texture and fixed palette. Reject any take that changes required garments or makes them look synthetic.",
+                        "expression_performance": "Pick the take whose face and posture carry the intended temperament without human hands or exaggerated cartoon acting. Reject a generic animal expression.",
+                        "story_ready_pose": "Pick the take that can plausibly enter the film world: correct anatomy and stance, readable action, costume continuity and the required emotional bearing.",
+                    }.get(item.get("id"), "Pick the take that most clearly proves this trial’s stated purpose.")
+                    takes = ''.join('<label class="daily"><input type="radio" name="winner" value="' + esc(take.get("path")) + '" ' + ('checked' if take.get("path") == selected_path else '') + '><img src="/file?path=' + esc(take.get("path")) + '" alt="trial take"><span>Current batch · Take ' + str(number) + ' · seed ' + esc(take.get("seed")) + '</span></label>' for number, take in enumerate(variants, start=1))
+                    archive = ''
+                    if len(runs) > 1:
+                        archived = []
+                        for run_number, run in enumerate(reversed(runs[:-1]), start=1):
+                            archived_takes = ''.join('<a class="clare-archive-take" href="/file?path=' + esc(take.get("path")) + '" target="_blank"><img src="/file?path=' + esc(take.get("path")) + '" alt="earlier trial take"><span>Earlier batch ' + str(len(runs) - run_number) + ' · seed ' + esc(take.get("seed")) + '</span></a>' for take in run.get("variants", []))
+                            archived.append('<div class="clare-archive-grid">' + archived_takes + '</div>')
+                        archive = '<details class="clare-trial-history"><summary>Show earlier generated batches (' + str(len(runs) - 1) + ')</summary>' + ''.join(archived) + '</details>'
+                    review = ''
+                    if takes:
+                        review = '<form class="clare-take-review" hx-post="/clare/character/trials/select" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><input type="hidden" name="trial_id" value="' + esc(item.get("id")) + '"><h4>Step 1 — shortlist one take</h4><p>Clicking an image only highlights it. It does not save anything yet.</p><div class="dailies">' + takes + '</div><div class="clare-commit"><button>Step 2 — save highlighted take as provisional reference</button><small>This explicitly records the selected image for Clare’s later continuity checks. It is not a final lock and can be changed.</small></div></form>'
+                    generate = '<form class="clare-trial-generate" hx-post="/clare/character/trials/generate" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><input type="hidden" name="trial_id" value="' + esc(item.get("id")) + '"><input type="hidden" name="variants" value="' + str(trial_variants) + '"><label class="clare-refinement"><b>What should change in the next four takes?</b><textarea name="refinement" rows="3" placeholder="Example: Keep this design, but Wooster must stand upright on two legs with hoof-like forefeet; retain the exact cap, jacket and waistcoat."></textarea></label><div class="clare-generate-action"><button>Generate ' + ('revised' if runs else '') + ' Trial ' + str(index) + ' takes</button><span class="clare-trial-render htmx-indicator"><i></i>ComfyUI is rendering four takes. This may take a few minutes.</span></div></form>'
+                    status = '<div class="notice good">A provisional reference is selected for this trial. It remains changeable and is not a final character lock.</div>' if selected_path else ''
+                    cards.append('<article class="clare-test-card"><span class="eyebrow">TRIAL ' + str(index) + '</span><h3>' + esc(item["name"]) + '</h3><p>' + esc(item["purpose"]) + '</p><small>Reference-sheet target: ' + esc(item["target"]) + '</small><p class="clare-pick-guide"><b>Pick for:</b> ' + esc(guide) + '</p>' + generate + review + archive + status + '</article>')
+                selections = [item.get("selected_variant") for item in trials]
+                consolidation = state.get("character_consolidation", {}).get(selected_character, {})
+                if all(selections):
+                    review_html = '<section class="clare-consolidation"><span class="eyebrow">NEXT: CLARE CONSOLIDATION GATE</span><h3>Review the four provisional references together</h3><p>Clare will inspect the four selected images against the character brief: anatomy and stance, identity, costume, style, and whether the selections belong to one character. This is a review only; nothing locks until you explicitly approve an approved result.</p><form hx-post="/clare/character/consolidate" hx-target="#clare-workspace" hx-indicator="#clare-consolidation-loading"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><button>Ask Clare to review the four selections</button><span id="clare-consolidation-loading" class="htmx-indicator">Clare is inspecting the selected reference images…</span></form>'
+                    if consolidation:
+                        verdict = consolidation.get("verdict", "revise")
+                        trial_notes = ''.join('<li><b>' + esc(note.get("trial", "Trial")) + ':</b> ' + esc(note.get("verdict", "")) + ' — ' + esc(note.get("note", "")) + '</li>' for note in consolidation.get("trial_reviews", []))
+                        review_html += '<div class="notice ' + ('good' if verdict == 'approved' else 'warn') + '"><b>Clare’s consolidation decision: ' + esc(verdict.upper()) + '.</b><p>' + esc(consolidation.get("summary", "")) + '</p><ul>' + trial_notes + '</ul></div>'
+                        if verdict == 'approved' and not consolidation.get("locked"):
+                            review_html += '<form hx-post="/clare/character/consolidate/lock" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><button>Approve and lock this character reference set</button><small>This records the four approved references in the production book for downstream scene work.</small></form>'
+                        elif verdict == 'revise':
+                            pending = state.get("character_revision_alignment", {}).get(selected_character, {})
+                            if pending:
+                                changes = ''.join('<li>' + esc(item) + '</li>' for item in pending.get("accepted", [])) or '<li>No accepted points were returned.</li>'
+                                corrections = ''.join('<li>' + esc(item) + '</li>' for item in pending.get("changed", [])) or '<li>No changes were returned.</li>'
+                                review_html += '<section class="clare-alignment"><h4>Clare’s proposed realignment</h4><p><b>Confirmation:</b> ' + esc(pending.get("confirmation", "")) + '</p><div><article><b>Director points accepted</b><ul>' + changes + '</ul></article><article><b>Clare corrections retained</b><ul>' + corrections + '</ul></article></div><p><b>Revised rendering specification:</b> ' + esc(pending.get("rerender_instruction", "")) + '</p><p>The written character brief below has been updated as a proposed revision. Confirm it before any image generation starts.</p><form hx-post="/clare/character/consolidate/confirm-alignment" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><div class="clare-generate-action"><button>Confirm alignment and render all four revised trials</button><span class="clare-trial-render htmx-indicator"><i></i>Alignment confirmed; ComfyUI is rendering sixteen revised takes…</span></div></form></section>'
+                            else:
+                                review_html += '<form class="clare-revision-response" hx-post="/clare/character/consolidate/revise" hx-target="#clare-workspace" hx-indicator="#clare-alignment-loading"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><label><b>Director response to Clare’s review</b><textarea name="director_response" rows="4" placeholder="State which Clare points you accept, which must change, and what the character must preserve."></textarea></label><p>Clare will update the written character brief, distinguish accepted points from corrections, and return a proposed rendering specification. No images render at this step.</p><div class="clare-generate-action"><button>Send response to Clare for written realignment</button><span id="clare-alignment-loading" class="clare-trial-render htmx-indicator"><i></i>Clare is realigning the written character brief…</span></div></form>'
+                        elif consolidation.get("locked"):
+                            review_html += '<div class="notice good"><b>Character reference set locked.</b> The approved images are now registered for downstream scene work.</div>'
+                    review_html += '</section>'
+                else:
+                    review_html = '<section class="clare-consolidation gated"><span class="eyebrow">NEXT: CLARE CONSOLIDATION GATE</span><h3>Select one provisional reference from every trial first.</h3><p>Once all four are selected, Clare can judge whether they form one credible, consistent character before anything is locked.</p></section>'
+                trial_html = '<section class="clare-trials"><span class="eyebrow">REFERENCE-SHEET TRIALS</span><h3>Character trial plan prepared — generate, judge, refine, then choose a provisional reference</h3><p>Each trial returns ' + str(trial_variants) + ' new takes. Use the guidance on each card, describe a correction when needed, and regenerate. Every batch remains available under that trial; choosing a take records it for later Clare continuity checks, not as a final lock.</p><div class="clare-test-board">' + ''.join(cards) + '</div></section>' + review_html
             else:
                 trial_html = '<section class="clare-trials"><span class="eyebrow">NEXT: REFERENCE-SHEET TRIALS</span><h3>Prepare the first character images</h3><p>When this brief feels right, prepare four deliberate reference-sheet trials: silhouette, costume, expression and full-body pose. Nothing generates until you choose to roll camera.</p><form hx-post="/clare/character/trials" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><button>Prepare character-sheet trials</button></form></section>'
-            brief_html = '<section class="clare-character-brief"><span class="eyebrow">CLARE’S CURRENT CHARACTER BRIEF</span><h3>' + esc(selected.get("name")) + '</h3><p class="clare-brief-intro">Read this as a working dossier, not a final lock. Use the answers below to correct it before preparing image trials.</p><div class="clare-brief-sections">' + sections + '</div>' + question_form + trial_html + '</section>'
+            confirmation = state.get("character_confirmations", {}).get(selected_character, "")
+            confirmation_html = '<div class="notice good clare-answer-confirmation" tabindex="-1"><b>Clare’s response is ready.</b> ' + esc(confirmation) + '</div>' if confirmation else ''
+            brief_html = '<section class="clare-character-brief"><span class="eyebrow">CLARE’S CURRENT CHARACTER BRIEF</span><h3>' + esc(selected.get("name")) + '</h3><p class="clare-brief-intro">Read this as a working dossier, not a final lock. Use the answers below to correct it before preparing image trials.</p><div class="clare-brief-sections">' + sections + '</div>' + confirmation_html + question_form + trial_html + '</section>'
         character_stage = '<section class="clare-stage"><div class="clare-stage-head"><div><span class="panel-kicker">CHARACTER CONVERSATION: ' + esc(selected.get("suggested_id")) + '</span><h2>Talk to Clare about ' + esc(selected.get("name")) + '.</h2><p>Describe the character you want to see. Be plain and subjective: what feels right, what must not change, what feels too polished, too cute, too modern, or simply wrong.</p></div>' + pill("In development", "active") + '</div><form id="clare-character-brief-form" hx-post="/clare/character/brief" hx-target="#clare-workspace" hx-indicator="#clare-brief-loading" class="clare-form"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><label>YOUR DIRECTION FOR ' + esc(selected.get("name")).upper() + '<textarea name="director_note" rows="5" placeholder="For example: keep the Pig composed and capable, but not aristocratic. His country clothes should look practical and lived-in, never costume-shop neat. He must read clearly in silhouette."></textarea><small>This is a conversation turn, not a final prompt. Clare will return a character brief and questions for you to refine.</small></label><div class="clare-actions"><button>Ask Clare for a character brief</button><span>Clare will use Harry’s role, your direction, and the reference images below.</span><span id="clare-brief-loading" class="htmx-indicator">Clare is studying your direction and references…</span></div></form><div class="clare-reference-area"><div><span class="eyebrow">CHARACTER REFERENCES</span><h3>Show Clare images that help define ' + esc(selected.get("name")) + '.</h3><p>Tell Clare what to take from each image: silhouette, face, clothes, texture, attitude, or what to avoid. She will not copy the subject.</p></div><form hx-post="/clare/character/reference" hx-encoding="multipart/form-data" hx-target="#clare-workspace" class="clare-upload"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><input type="file" name="reference_file" accept="image/*" required><select name="role"><option value="Overall character feeling">Overall feeling</option><option value="Silhouette and shape">Silhouette and shape</option><option value="Costume and materials">Costume and materials</option><option value="Face or expression">Face or expression</option><option value="Drawing and paint treatment">Drawing and paint treatment</option><option value="Avoid">Avoid this aspect</option></select><button>Add character reference</button></form><ul class="clare-reference-list">' + reference_rows + '</ul></div>' + brief_html + '</section>'
     later = '<details class="clare-later-stage"><summary>Later: use the approved character direction to establish the wider film look</summary><p>Once Pig or Rooster is credible on a character sheet, Clare will test that locked design against the farm, dock, storm and island scenes. Scene look follows the character lock; it does not replace it.</p></details>'
     return '<section class="clare-journey"><div class="run-control"><div><span class="panel-kicker">CLARE: CASTING & COSTUME</span><h2>' + esc(handoff.get("title")) + '</h2><small>Build a character the audience can recognize, then use that lock to guide the rest of the film.</small></div>' + pill("Guided build", "active") + '</div>' + cast_stage + character_stage + later + '</section>'
@@ -757,6 +837,7 @@ async def answer_clare_questions(request: Request, character_id: Annotated[str, 
         return '<div class="notice warn">' + esc(error) + '</div>'
     state.setdefault("character_briefs", {})[character_id] = refined
     state.setdefault("character_notes", {}).setdefault(character_id, []).append({"director": direction, "created_at": refined.get("created_at", "")})
+    state.setdefault("character_confirmations", {})[character_id] = "Clare received " + str(len(answers)) + " answer(s) and has regenerated this character brief. Review the updated dossier below before preparing or regenerating trials."
     state.get("character_trials", {}).pop(character_id, None)
     save_clare_development(current.active_project_id, state)
     event("Clare refined the character brief for " + character_id + " using your answers.")
@@ -770,13 +851,151 @@ async def prepare_clare_character_trials(character_id: Annotated[str, Form()]):
     if character_id not in state.get("character_briefs", {}):
         return '<div class="notice warn">Create and review Clare’s character brief before preparing image trials.</div>'
     state.setdefault("character_trials", {})[character_id] = [
-        {"name": "Silhouette and material lock", "purpose": "Prove the character reads instantly at a distance.", "target": "full-body side and three-quarter standing views"},
-        {"name": "Costume and surface lock", "purpose": "Prove the clothes, natural surface and materials hold together.", "target": "full-body front view with costume-detail inset"},
-        {"name": "Expression and performance lock", "purpose": "Prove the inner character reads without human gestures.", "target": "head-and-shoulders calm, concerned and dry-amusement views"},
-        {"name": "Story-ready pose lock", "purpose": "Prove the character can carry the film’s physical world.", "target": "full-body in-context pose matching Harry’s story role"},
+        {"id": "silhouette_material", "name": "Silhouette and material lock", "purpose": "Prove the character reads instantly at a distance.", "target": "full-body side and three-quarter standing views", "runs": [], "selected_variant": ""},
+        {"id": "costume_surface", "name": "Costume and surface lock", "purpose": "Prove the clothes, natural surface and materials hold together.", "target": "full-body front view with costume-detail inset", "runs": [], "selected_variant": ""},
+        {"id": "expression_performance", "name": "Expression and performance lock", "purpose": "Prove the inner character reads without human gestures.", "target": "head-and-shoulders calm, concerned and dry-amusement views", "runs": [], "selected_variant": ""},
+        {"id": "story_ready_pose", "name": "Story-ready pose lock", "purpose": "Prove the character can carry the film’s physical world.", "target": "full-body in-context pose matching Harry’s story role", "runs": [], "selected_variant": ""},
     ]
     save_clare_development(current.active_project_id, state)
     event("Clare prepared four character-sheet reference trials for " + character_id + ".")
+    return await current_clare()
+
+
+@app.post("/clare/character/trials/generate", response_class=HTMLResponse)
+async def generate_clare_character_trial(character_id: Annotated[str, Form()], trial_id: Annotated[str, Form()], variants: Annotated[int, Form()] = 4, refinement: Annotated[str, Form()] = ""):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    handoff = load_clare_handoff(current.active_project_id) or {}
+    character = next((item for item in handoff.get("characters", []) if str(item.get("suggested_id")) == character_id), None)
+    brief = state.get("character_briefs", {}).get(character_id)
+    trial = next((item for item in state.get("character_trials", {}).get(character_id, []) if item.get("id") == trial_id), None)
+    if not character or not brief or not trial:
+        return '<div class="notice warn">Clare needs the selected character, current brief, and trial plan before rolling camera.</div>'
+    refinement = refinement.strip()
+    prompt = clare_trial_prompt(character, brief, trial, state)
+    if refinement:
+        prompt += " Director correction for this new batch: " + refinement
+    event("Rolling Clare character-sheet trial " + trial_id + " for " + character_id + ".")
+    try:
+        result = await asyncio.to_thread(engine.generate, clare_trial_config(current), "clare_" + character_id + "_" + trial_id, prompt, "", None, variants)
+    except engine.EngineError as error:
+        event("Clare trial generation failed: " + str(error))
+        return '<div class="notice warn">' + esc(error) + '</div>'
+    trial.setdefault("runs", []).append({"prompt": prompt, "refinement": refinement, "workflow": "FLUX1 dev text-to-image character-sheet", "created_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"), "variants": [{"path": item.image_path, "seed": item.seed} for item in result.variants], "warnings": result.warnings})
+    save_clare_development(current.active_project_id, state)
+    event("Clare trial returned " + str(len(result.variants)) + " dailies.")
+    return await current_clare()
+
+
+@app.post("/clare/character/trials/select", response_class=HTMLResponse)
+async def select_clare_character_trial(character_id: Annotated[str, Form()], trial_id: Annotated[str, Form()], winner: Annotated[str, Form()] = ""):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    trial = next((item for item in state.get("character_trials", {}).get(character_id, []) if item.get("id") == trial_id), None)
+    available = {take.get("path") for run in (trial or {}).get("runs", []) for take in run.get("variants", [])}
+    if not trial or winner not in available:
+        return '<div class="notice warn">Choose a generated take before sending it to Clare review.</div>'
+    trial["selected_variant"] = winner
+    trial["selection_status"] = "provisional-reference"
+    save_clare_development(current.active_project_id, state)
+    event("Selected provisional Clare reference for " + trial_id + ".")
+    return await current_clare()
+
+
+@app.post("/clare/character/consolidate", response_class=HTMLResponse)
+async def consolidate_clare_character_trials(character_id: Annotated[str, Form()]):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    trials = state.get("character_trials", {}).get(character_id, [])
+    brief = state.get("character_briefs", {}).get(character_id)
+    selected = [{"trial": item.get("name"), "path": item.get("selected_variant")} for item in trials if item.get("selected_variant")]
+    if not brief or len(selected) != 4:
+        return '<div class="notice warn">Choose one provisional reference in each of the four trials before Clare can consolidate them.</div>'
+    try:
+        review = await asyncio.to_thread(specialists.clare_consolidate_character_trials, current.harry_provider, brief, selected)
+    except specialists.SpecialistError as error:
+        return '<div class="notice warn">' + esc(error) + '</div>'
+    state.setdefault("character_consolidation", {})[character_id] = review
+    save_clare_development(current.active_project_id, state)
+    event("Clare completed the four-reference consolidation review for " + character_id + ".")
+    return await current_clare()
+
+
+@app.post("/clare/character/consolidate/revise", response_class=HTMLResponse)
+async def revise_clare_character_consolidation(character_id: Annotated[str, Form()], director_response: Annotated[str, Form()] = ""):
+    current = current_cfg()
+    response = director_response.strip()
+    state = load_clare_development(current.active_project_id)
+    consolidation = state.get("character_consolidation", {}).get(character_id, {})
+    brief = state.get("character_briefs", {}).get(character_id)
+    if not response:
+        return '<div class="notice warn">Write a response to Clare before requesting written realignment.</div>'
+    if consolidation.get("verdict") != "revise" or not brief:
+        return '<div class="notice warn">A current Clare revise decision is required before realignment.</div>'
+    try:
+        alignment = await asyncio.to_thread(specialists.clare_realign_character_brief, current.harry_provider, brief, consolidation, response)
+    except specialists.SpecialistError as error:
+        return '<div class="notice warn">' + esc(error) + '</div>'
+    state.setdefault("character_revision_alignment", {})[character_id] = alignment
+    state.setdefault("character_briefs", {})[character_id] = alignment["revised_brief"]
+    save_clare_development(current.active_project_id, state)
+    event("Clare returned a written character realignment for " + character_id + "; director confirmation is required before rendering.")
+    return await current_clare()
+
+
+@app.post("/clare/character/consolidate/confirm-alignment", response_class=HTMLResponse)
+async def confirm_clare_character_alignment(character_id: Annotated[str, Form()]):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    alignment = state.get("character_revision_alignment", {}).get(character_id, {})
+    trials = state.get("character_trials", {}).get(character_id, [])
+    handoff = load_clare_handoff(current.active_project_id) or {}
+    character = next((item for item in handoff.get("characters", []) if str(item.get("suggested_id")) == character_id), None)
+    brief = state.get("character_briefs", {}).get(character_id)
+    if not alignment or not character or not brief or len(trials) != 4:
+        return '<div class="notice warn">Clare’s proposed realignment and all four trials are required before rendering.</div>'
+    event("Director confirmed Clare’s written realignment; revised character trials are starting for " + character_id + ".")
+    failures = []
+    instruction = alignment.get("rerender_instruction", "")
+    for trial in trials:
+        prompt = clare_trial_prompt(character, brief, trial, state) + " Approved revised rendering specification: " + instruction
+        try:
+            result = await asyncio.to_thread(engine.generate, clare_trial_config(current), "clare_" + character_id + "_" + trial.get("id", "trial") + "_aligned_revision", prompt, "", None, getattr(getattr(current, "agent", None), "variants_per_generation", 4))
+        except engine.EngineError as error:
+            failures.append(trial.get("name", "trial") + ": " + str(error))
+            continue
+        trial.setdefault("runs", []).append({"prompt": prompt, "refinement": alignment.get("director_response", ""), "alignment_confirmation": alignment.get("confirmation", ""), "workflow": "FLUX1 dev text-to-image character-sheet", "created_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"), "variants": [{"path": item.image_path, "seed": item.seed} for item in result.variants], "warnings": result.warnings})
+        trial["selected_variant"] = ""
+        trial.pop("selection_status", None)
+        failures.extend(trial.get("name", "trial") + ": " + warning for warning in result.warnings if warning)
+    state.setdefault("character_consolidation_history", {}).setdefault(character_id, []).append(state.get("character_consolidation", {}).get(character_id, {}))
+    state.setdefault("character_consolidation", {}).pop(character_id, None)
+    state.setdefault("character_revision_alignment_history", {}).setdefault(character_id, []).append(alignment)
+    state.setdefault("character_revision_alignment", {}).pop(character_id, None)
+    state.setdefault("character_confirmations", {})[character_id] = "Director-confirmed character realignment applied. Clare rendered revised takes for all four trials; select the new provisional references and submit them for consolidation review."
+    save_clare_development(current.active_project_id, state)
+    event("Director-confirmed revised Clare trial batch completed for " + character_id + ".")
+    if failures:
+        event("Some revised trial warnings: " + " | ".join(failures[:4]))
+    return await current_clare()
+
+@app.post("/clare/character/consolidate/lock", response_class=HTMLResponse)
+async def lock_clare_character_consolidation(character_id: Annotated[str, Form()]):
+    current = current_cfg()
+    state = load_clare_development(current.active_project_id)
+    review = state.get("character_consolidation", {}).get(character_id, {})
+    if review.get("verdict") != "approved":
+        return '<div class="notice warn">Clare must approve the four-reference consolidation before it can be locked.</div>'
+    trials = state.get("character_trials", {}).get(character_id, [])
+    try:
+        for trial in trials:
+            store.add_reference(current.storyboard_path, character_id, trial.get("selected_variant"), "Clare-approved " + trial.get("name", "character trial") + " reference")
+    except (OSError, ValueError) as error:
+        return '<div class="notice warn">Could not register the approved references: ' + esc(error) + '</div>'
+    review["locked"] = True
+    review["locked_at"] = __import__("datetime").datetime.now().isoformat(timespec="seconds")
+    save_clare_development(current.active_project_id, state)
+    event("Locked Clare’s approved character reference set for " + character_id + ".")
     return await current_clare()
 
 

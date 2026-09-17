@@ -1,0 +1,90 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "FLUX1\\flux1-dev-fp8.safetensors"
+    },
+    "_meta": {
+      "title": "FLUX character-trial checkpoint"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": ["1", 1]
+    },
+    "_meta": {
+      "title": "Character-sheet prompt"
+    }
+  },
+  "6": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": ["5", 0],
+      "guidance": 3.5
+    },
+    "_meta": {
+      "title": "FLUX guidance"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "",
+      "clip": ["1", 1]
+    },
+    "_meta": {
+      "title": "Negative prompt"
+    }
+  },
+  "8": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Character-sheet canvas"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["8", 0],
+      "seed": 0,
+      "steps": 20,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Character-sheet sampler"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["9", 0],
+      "vae": ["1", 2]
+    },
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["10", 0],
+      "filename_prefix": "clare_character_trial"
+    },
+    "_meta": {
+      "title": "Save character-sheet trial"
+    }
+  }
+}
