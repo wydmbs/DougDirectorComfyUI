@@ -178,7 +178,7 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
                 # that doesn't exist on the ComfyUI host silently loads nothing,
                 # so the render looks fine and quietly ignores the reference.
                 work, note = apply_reference(work, cfg, reference_image_path, scene_image_path,
-                                             upload=client.upload_image)
+                                             upload=client.upload_image, prompt=prompt_positive)
                 if note and note not in warnings:
                     warnings.append(note)
             prompt_id = client.queue_prompt(work)

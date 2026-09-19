@@ -442,6 +442,21 @@ def check_workflow(report, cfg, classes):
                        "Kontext was trained on a fixed set of resolutions. Add the\n"
                        "scaler between LoadImage and VAEEncode -- without it results\n"
                        "look softer in a way that reads as the model underperforming.")
+    elif found["has_comfy_partner"]:
+        report.add(section, OK,
+                   "It can lock a character's identity via the OpenAI Partner Node")
+        if not found["comfy_partner_image_field"]:
+            report.add(section, WARN, "Couldn't find the node's reference-image field",
+                       f"Checked for {', '.join(('model.images', 'images', 'image_1', 'model.image', 'image'))}.",
+                       "The node may have exported under a different field name than\n"
+                       "expected -- open it in ComfyUI, note the exact widget/input name\n"
+                       "for its reference image, and update COMFY_PARTNER_IMAGE_KEYS in\n"
+                       "reference_conditioning.py.")
+        report.add(section, WARN, "Billed to your Comfy account, not this app's OpenAI key",
+                   "",
+                   "Make sure ComfyUI itself is logged in to a Comfy account (or has\n"
+                   "COMFY_API_KEY set) -- OPENAI_API_KEY in this app's environment has\n"
+                   "no effect on this node.")
     elif found["can_lock_identity"]:
         family = found.get("ipadapter_family") or "?"
         report.add(section, WARN,

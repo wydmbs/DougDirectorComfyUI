@@ -6,7 +6,7 @@ Without it, "the same pig, angrier" is just the words "a pig, angry" with a
 different seed, and every character drifts. With it, the ChatGPT turnaround
 sheet drives IP-Adapter-Plus and the face survives into a new composition.
 
-Four ways in, because they do different jobs:
+Five ways in, because they do different jobs:
 
   Kontext      the character's identity, exactly. The reference is VAE-encoded
                into a full latent grid and rides along in the sequence the
@@ -16,9 +16,15 @@ Four ways in, because they do different jobs:
                tokens -- a summary of the picture, not the picture. Costume
                detail, button count and comb shape do not survive that
                bottleneck at any weight.
-  GPT Sunburst the character's identity, via a cloud edit call instead of a
-               local graph. Same instruction-not-description shape as
-               Kontext, but it never touches the workflow -- see below.
+  GPT Sunburst the character's identity, via a direct cloud edit call instead
+               of a local graph, billed to your own OpenAI key. Same
+               instruction-not-description shape as Kontext, but it never
+               touches the workflow -- see below.
+  Comfy        the same GPT Image models as Sunburst, but reached through
+  Partner      ComfyUI's own Partner Node (OpenAIGPTImageNodeV2) and billed to
+               a Comfy account instead of an OpenAI key. Unlike the two rows
+               above, this *is* a graph node -- it patches the workflow, and
+               ComfyUI does the calling.
   img2img      the scene's look. Fed the environment concept, at low denoise
                so the layout and palette hold.
 
@@ -26,18 +32,22 @@ Kontext and IP-Adapter are not two settings of one thing; they are different
 mechanisms, which is why turning the adapter weight up never closes the gap.
 Kontext is an edit model, so it wants an instruction ("turn him to face left")
 rather than a fresh description of the scene -- re-describing the character
-makes it redraw instead of transform. GPT Sunburst wants the same shape of
-instruction for the same reason -- it is also an edit model, just reached over
-the network instead of loaded into this graph.
+makes it redraw instead of transform. GPT Sunburst and the Comfy Partner node
+want the same shape of instruction for the same reason -- they call the same
+underlying edit model, just through two different doors.
 
 GPT Sunburst is the odd one out mechanically: it is not a node this module can
 wire into the workflow, because the whole render happens on OpenAI's side.
 apply_reference() therefore does nothing to the graph for this mode and
 returns a warning saying so -- the actual call lives in
 gpt_image_client.edit_image(), invoked by director_engine.generate() *instead
-of* queuing a ComfyUI prompt for that variant. Everything else in this module
-(describe_mode, review_instruction, IDENTITY_MODES) still treats it as a real
-identity mode; only the graph-patching functions don't apply to it.
+of* queuing a ComfyUI prompt for that variant. The Comfy Partner mode is the
+opposite: it *is* a node, submitted through the normal ComfyUI queue like
+Kontext or IP-Adapter, so it needs no OpenAI key on this machine at all --
+only a Comfy account logged in (or COMFY_API_KEY set) on whichever machine
+runs ComfyUI. Everything else in this module (describe_mode,
+review_instruction, IDENTITY_MODES) treats all of these as real identity
+modes; only the graph-patching functions differ.
 
 The workflow has to actually contain the nodes. When it doesn't, the caller
 gets a message naming exactly what to add -- never a silent no-op that looks
@@ -50,18 +60,26 @@ MODE_OFF = "off"
 MODE_IPADAPTER = "ipadapter"
 MODE_KONTEXT = "kontext"
 MODE_GPT_SUNBURST = "gpt_sunburst"
+MODE_COMFY_PARTNER = "comfy_partner"
 MODE_IMG2IMG = "img2img"
 MODE_BOTH = "both"
-SUPPORTED_MODES = (MODE_OFF, MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST, MODE_IMG2IMG, MODE_BOTH)
+SUPPORTED_MODES = (MODE_OFF, MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST,
+                   MODE_COMFY_PARTNER, MODE_IMG2IMG, MODE_BOTH)
 
 # The modes that carry a character's identity, whichever mechanism they use.
-IDENTITY_MODES = (MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST, MODE_BOTH)
+IDENTITY_MODES = (MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST, MODE_COMFY_PARTNER, MODE_BOTH)
 
 # Modes whose render happens off a call this module doesn't make, rather than
 # by patching the ComfyUI graph. director_engine checks this before it builds
 # a workflow at all, so callers never queue a ComfyUI prompt for a variant
-# Sunburst is about to generate on its own.
+# Sunburst is about to generate on its own. Comfy Partner is deliberately NOT
+# in this set -- it is a real node, submitted the normal way.
 EXTERNAL_MODES = (MODE_GPT_SUNBURST,)
+
+# Which GPT Image model the Comfy Partner node should use. Kept here rather
+# than hardcoded in the patch function so switching to gpt-image-2.5-flare (or
+# back to plain gpt-image-2) for cost/speed is a config change, not a code one.
+DEFAULT_COMFY_PARTNER_MODEL = "gpt-image-2.5-sunburst"
 
 
 def is_external(cfg) -> bool:
@@ -87,6 +105,20 @@ KONTEXT_SCALE_CLASSES = ("FluxKontextImageScale",)
 LOAD_IMAGE_CLASSES = ("LoadImage", "LoadImageFromPath", "ETN_LoadImageBase64")
 LATENT_CLASSES = ("VAEEncode",)
 
+# Comfy's built-in Partner Node for OpenAI's GPT Image family. One node, five
+# selectable models (gpt-image-1, -1.5, -2, -2.5-flare, -2.5-sunburst) chosen
+# by its "model" widget -- see docs.comfy.org/built-in-nodes/OpenAIGPTImageNodeV2.
+# The image-reference input is a growable IMAGE slot rather than a fixed
+# field, and dynamic-combo/growable inputs like this have been seen to export
+# under more than one literal key depending on ComfyUI's version -- these are
+# tried in order rather than assumed, and inspect_workflow()/apply_reference()
+# say plainly which one (if any) matched, so a rename upstream is visible
+# instead of silently doing nothing.
+COMFY_PARTNER_CLASSES = ("OpenAIGPTImageNodeV2",)
+COMFY_PARTNER_MODEL_KEYS = ("model",)
+COMFY_PARTNER_PROMPT_KEYS = ("prompt",)
+COMFY_PARTNER_IMAGE_KEYS = ("model.images", "images", "image_1", "model.image", "image")
+
 
 class ReferenceError(Exception):
     pass
@@ -110,7 +142,7 @@ def _mode(cfg) -> str:
 
 def apply_reference(workflow: dict, cfg, reference_image_path: str,
                     scene_image_path: str = "", weight: float = 0.0,
-                    upload=None):
+                    upload=None, prompt: str = ""):
     """Return (workflow, warning). warning is "" when everything asked for landed.
 
     `upload` turns a local path into something ComfyUI can actually open, and is
@@ -119,6 +151,11 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
     generation then looks successful while ignoring the reference entirely.
     Callers pass ComfyClient.upload_image. When it is omitted the local path is
     used, which is only correct for a same-machine ComfyUI.
+
+    `prompt` is only consumed by the Comfy Partner mode: that node carries its
+    own prompt field, separate from whatever text encode node.node_mapping
+    points at for the FLUX side of the graph, so the instruction has to be
+    written here rather than assumed to already be on the graph.
 
     The workflow dict is already a deep copy by the time it reaches here
     (apply_node_overrides copies), so editing in place is safe.
@@ -154,6 +191,11 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
             note = _apply_kontext(workflow, reference_image_path, upload)
             if note:
                 notes.append(note)
+        elif mode == MODE_COMFY_PARTNER:
+            note = _apply_comfy_partner(workflow, reference_image_path, prompt,
+                                        _comfy_partner_model(cfg), upload)
+            if note:
+                notes.append(note)
         else:
             note = _apply_ipadapter(workflow, reference_image_path,
                                     weight or _default_weight(cfg), upload)
@@ -173,6 +215,11 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
 
 def _default_weight(cfg) -> float:
     return float(getattr(getattr(cfg, "agent", None), "ipadapter_weight", 1.0) or 1.0)
+
+
+def _comfy_partner_model(cfg) -> str:
+    return (getattr(getattr(cfg, "agent", None), "comfy_partner_model", "")
+            or DEFAULT_COMFY_PARTNER_MODEL)
 
 
 def _resolve(image_path: str, upload) -> str:
@@ -301,6 +348,66 @@ def _note_kontext_scale(workflow: dict) -> str:
     return ""
 
 
+def _apply_comfy_partner(workflow: dict, image_path: str, prompt: str, model: str,
+                         upload=None) -> str:
+    """Point the OpenAIGPTImageNodeV2 Partner Node at the reference and the model.
+
+    Unlike Kontext or IP-Adapter, this node's own IMAGE input has to be wired
+    to a LoadImage node's output -- it's a link, not a filename field the way
+    LoadImage's own `image` is. So this both feeds an existing LoadImage (or
+    reports there isn't one, same as _apply_img2img's fallback) and connects
+    that loader's output into whichever of the node's own image-slot field
+    names actually exists.
+    """
+    node_id, node = _find(workflow, COMFY_PARTNER_CLASSES)
+    if node_id is None:
+        return (f"the workflow has no OpenAIGPTImageNodeV2 node, so the character's identity "
+                f"was not sent to {model} -- add Comfy's 'OpenAI GPT Image 1.5' Partner Node "
+                f"(pick '{model}' from its model dropdown) and make sure ComfyUI is logged in "
+                f"to a Comfy account or has COMFY_API_KEY set")
+
+    inputs = node.setdefault("inputs", {})
+    notes = []
+
+    model_key = next((k for k in COMFY_PARTNER_MODEL_KEYS if k in inputs), None)
+    if model_key:
+        inputs[model_key] = model
+    else:
+        notes.append(f"couldn't find a '{COMFY_PARTNER_MODEL_KEYS[0]}' field on the node to "
+                     f"select {model} -- it may have rendered with a different model than intended")
+
+    prompt_key = next((k for k in COMFY_PARTNER_PROMPT_KEYS if k in inputs), None)
+    if prompt and prompt_key:
+        inputs[prompt_key] = prompt
+    elif prompt:
+        notes.append("couldn't find the node's prompt field, so the instruction was not sent")
+
+    try:
+        reference = _resolve(image_path, upload)
+    except Exception as error:  # noqa: BLE001 - reported, never silently skipped
+        return " | ".join(notes + [f"could not send the reference to ComfyUI, identity not "
+                                   f"locked: {error}"])
+
+    loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
+    if not loaders:
+        notes.append("no LoadImage node is available for the reference -- add one for the "
+                     "Partner Node's image input to read from")
+        return " | ".join(notes)
+    loader_id, loader = loaders[-1]
+    loader.setdefault("inputs", {})["image"] = reference
+
+    image_key = next((k for k in COMFY_PARTNER_IMAGE_KEYS if k in inputs), None)
+    if image_key is None:
+        notes.append(
+            f"the reference was uploaded and the LoadImage node was set, but none of "
+            f"{', '.join(COMFY_PARTNER_IMAGE_KEYS)} matched a field on the node -- link the "
+            f"LoadImage's IMAGE output into the node's reference-image slot by hand, and tell "
+            f"Claude what the field is actually called so this list can be fixed")
+        return " | ".join(notes)
+    inputs[image_key] = [loader_id, 0]
+    return " | ".join(notes)
+
+
 def _apply_img2img(workflow: dict, image_path: str, upload=None) -> str:
     """Anchor the background by encoding the scene concept as the start latent."""
     encode_id, encode = _find(workflow, LATENT_CLASSES)
@@ -354,6 +461,7 @@ def inspect_workflow(workflow: dict) -> dict:
     adapter_id = flux_id or sd_id
     kontext_id, _ = _find(workflow, KONTEXT_CLASSES)
     scale_id, _ = _find(workflow, KONTEXT_SCALE_CLASSES)
+    partner_id, partner_node = _find(workflow, COMFY_PARTNER_CLASSES)
     encode_id, _ = _find(workflow, LATENT_CLASSES)
     loaders = _find_all(workflow, LOAD_IMAGE_CLASSES)
     # A Kontext graph encodes its reference through a VAEEncode too, so the
@@ -361,16 +469,24 @@ def inspect_workflow(workflow: dict) -> dict:
     # anchoring. Saying otherwise makes the doctor warn about a denoise of 1.0
     # that is entirely correct for Kontext.
     kontext = kontext_id is not None
+    has_partner = partner_id is not None
+    partner_image_key = None
+    if has_partner:
+        inputs = partner_node.get("inputs") or {}
+        partner_image_key = next((k for k in COMFY_PARTNER_IMAGE_KEYS if k in inputs), None)
     return {
         "has_ipadapter": adapter_id is not None,
         "ipadapter_family": "flux" if flux_id else ("sd" if sd_id else ""),
         "has_kontext": kontext,
         "has_kontext_scale": scale_id is not None,
+        "has_comfy_partner": has_partner,
+        "comfy_partner_image_field": partner_image_key or "",
         "identity_mechanism": ("kontext" if kontext
-                               else ("ipadapter" if adapter_id is not None else "")),
+                               else ("comfy_partner" if has_partner
+                                     else ("ipadapter" if adapter_id is not None else ""))),
         "has_img2img": encode_id is not None and not kontext,
         "load_image_nodes": len(loaders),
-        "can_lock_identity": (kontext or adapter_id is not None) and bool(loaders),
+        "can_lock_identity": (kontext or has_partner or adapter_id is not None) and bool(loaders),
         "can_anchor_scene": encode_id is not None and bool(loaders) and not kontext,
     }
 
@@ -381,8 +497,11 @@ def describe_mode(cfg) -> str:
         MODE_KONTEXT: ("Kontext — the reference is encoded into the sequence being generated, "
                        "so the character survives intact."),
         MODE_IPADAPTER: "IP-Adapter — the reference guides identity, approximately.",
-        MODE_GPT_SUNBURST: ("GPT Image 2.5 Sunburst — a cloud edit call holds identity instead "
-                            "of a local graph; costs API credits and has no seed."),
+        MODE_GPT_SUNBURST: ("GPT Image 2.5 Sunburst — a direct cloud edit call holds identity "
+                            "instead of a local graph; costs your own OpenAI credits and has no seed."),
+        MODE_COMFY_PARTNER: (f"Comfy Partner Node ({_comfy_partner_model(cfg)}) — the same GPT "
+                             f"Image edit call as Sunburst, but run as a node inside the workflow "
+                             f"and billed to your Comfy account instead of an OpenAI key."),
         MODE_IMG2IMG: "img2img — the scene concept anchors the background.",
         MODE_BOTH: "IP-Adapter + img2img — identity from the reference, look from the scene.",
     }.get(_mode(cfg), f"Unknown mode '{_mode(cfg)}'.")
@@ -441,13 +560,14 @@ def review_instruction(prompt: str, cfg) -> str:
     came back with the waistcoat turned into a lapelled jacket. The instruction
     alone kept the waistcoat, its three brass buttons and the studio light.
 
-    Sunburst gets the same review as Kontext: it is also an edit model reading
-    an instruction against a reference, and the same "don't describe what
-    should survive" logic applies to why it drifts.
+    Sunburst and the Comfy Partner node get the same review as Kontext: all
+    three are edit models reading an instruction against a reference (the
+    latter two are, mechanically, the same OpenAI model), and the same
+    "don't describe what should survive" logic applies to why they drift.
 
     Returns "" when the prompt is shaped the way the model wants.
     """
-    if _mode(cfg) not in (MODE_KONTEXT, MODE_GPT_SUNBURST) or not (prompt or "").strip():
+    if _mode(cfg) not in (MODE_KONTEXT, MODE_GPT_SUNBURST, MODE_COMFY_PARTNER) or not (prompt or "").strip():
         return ""
 
     text = prompt.strip()

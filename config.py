@@ -80,6 +80,10 @@ class AgentConfig:
     # that is weaker than the adapter's baseline, which is a strange place to
     # start when the complaint is that identity drifts.
     ipadapter_weight: float = 1.0
+    # Which GPT Image model the Comfy Partner node (OpenAIGPTImageNodeV2)
+    # selects. Only read when reference_conditioning == "comfy_partner"; see
+    # reference_conditioning.DEFAULT_COMFY_PARTNER_MODEL for the default.
+    comfy_partner_model: str = "gpt-image-2.5-sunburst"
 
 
 @dataclass
