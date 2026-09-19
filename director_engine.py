@@ -15,6 +15,7 @@ import io
 import json
 import os
 import random
+import threading
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -26,6 +27,7 @@ from comfy_client import ComfyClient, ComfyClientError, apply_node_overrides
 
 SHEET_TYPES = ("CHARACTER", "BACKDROP", "PROP")
 ENTRY_PREFIXES = ("CHARACTER:", "BACKDROP:", "PROP:")
+COMFY_RENDER_LOCK = threading.Lock()
 CONCEPT_STAGE = "Concept (mashup)"
 PANEL_STAGE = "Sheet panel"
 
@@ -132,66 +134,96 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
             workflow = json.load(handle)
         client = ComfyClient(cfg.comfyui_url)
 
-    for index in range(n_variants):
-        seed = base_seed + index
-        if on_progress:
-            on_progress(f"variant {index + 1}/{n_variants} (seed {seed})")
-
-        if cfg.mock_mode:
+    if cfg.mock_mode:
+        for index in range(n_variants):
+            seed = base_seed + index
+            if on_progress:
+                on_progress(f"variant {index + 1}/{n_variants} (seed {seed})")
             path = _save_image(_mock_image(label, prompt_positive, seed), cfg.images_dir, label, seed)
             variants.append(Variant(path, seed, label))
-            continue
+        return GenerationResult(variants, warnings)
 
-        if external_reference:
+    if external_reference:
+        # Sunburst renders entirely off OpenAI's API -- no ComfyUI process is
+        # involved, so the GPU lock/health-check/cleanup below (which exist to
+        # guard concurrent access to a single local GPU) don't apply here.
+        from gpt_image_client import GptImageError, edit_image
+        from reference_conditioning import review_instruction
+        # Checked once per generation, not once per variant -- the prompt is
+        # the same for all of them.
+        shape = review_instruction(prompt_positive, cfg)
+        if shape:
+            warnings.append(shape)
+        for index in range(n_variants):
+            seed = base_seed + index
+            if on_progress:
+                on_progress(f"variant {index + 1}/{n_variants} (seed {seed})")
             # Sunburst has no seed parameter, so every "variant" here is a
             # fresh call rather than a seeded rerun -- expect near-duplicates,
             # not the controlled spread ComfyUI's sampler gives you.
-            from gpt_image_client import GptImageError, edit_image
-            if index == 0:
-                from reference_conditioning import review_instruction
-                shape = review_instruction(prompt_positive, cfg)
-                if shape:
-                    warnings.append(shape)
             try:
                 data = edit_image(reference_image_path, prompt_positive)
                 img = Image.open(io.BytesIO(data))
                 variants.append(Variant(_save_image(img, cfg.images_dir, label, seed), seed, label))
             except GptImageError as error:
                 warnings.append(f"seed {seed}: {error}")
-            continue
+        return GenerationResult(variants, warnings)
 
+    with COMFY_RENDER_LOCK:
+        if not client.ping():
+            raise EngineError(
+                "ComfyUI is unavailable. Start it and wait for its GPU/model loading to "
+                "complete before rendering.")
         try:
-            work = apply_node_overrides(workflow, cfg.node_mapping, prompt_positive, prompt_negative, seed)
-            if index == 0:
-                # Checked once per generation, not once per variant -- the
-                # prompt is the same for all of them, and repeating the note
-                # would make it look like several separate problems.
-                from reference_conditioning import review_instruction
-                shape = review_instruction(prompt_positive, cfg)
-                if shape:
-                    warnings.append(shape)
-            if reference_image_path or scene_image_path:
-                from reference_conditioning import apply_reference
-                # Always upload rather than pass a path. It is correct whether
-                # ComfyUI is on this machine or the GPU box, and the failure mode
-                # of getting it wrong is invisible: a LoadImage pointed at a path
-                # that doesn't exist on the ComfyUI host silently loads nothing,
-                # so the render looks fine and quietly ignores the reference.
-                work, note = apply_reference(work, cfg, reference_image_path, scene_image_path,
-                                             upload=client.upload_image, prompt=prompt_positive)
-                if note and note not in warnings:
-                    warnings.append(note)
-            prompt_id = client.queue_prompt(work)
-            history = client.wait_for_completion(prompt_id)
-            refs = client.extract_image_refs(history)
-            if not refs:
-                warnings.append(f"seed {seed}: no images returned")
-                continue
-            filename, subfolder, folder_type = refs[0]
-            img = Image.open(io.BytesIO(client.fetch_image_bytes(filename, subfolder, folder_type)))
-            variants.append(Variant(_save_image(img, cfg.images_dir, label, seed), seed, label))
-        except ComfyClientError as error:
-            warnings.append(f"seed {seed}: {error}")
+            for index in range(n_variants):
+                seed = base_seed + index
+                if on_progress:
+                    on_progress(f"variant {index + 1}/{n_variants} (seed {seed})")
+                try:
+                    work = apply_node_overrides(workflow, cfg.node_mapping, prompt_positive,
+                                                prompt_negative, seed)
+                    if index == 0:
+                        # Checked once per generation, not once per variant --
+                        # the prompt is the same for all of them, and
+                        # repeating the note would make it look like several
+                        # separate problems.
+                        from reference_conditioning import review_instruction
+                        shape = review_instruction(prompt_positive, cfg)
+                        if shape:
+                            warnings.append(shape)
+                    if reference_image_path or scene_image_path:
+                        from reference_conditioning import apply_reference
+                        # Always upload rather than pass a path. It is correct
+                        # whether ComfyUI is on this machine or the GPU box,
+                        # and the failure mode of getting it wrong is
+                        # invisible: a LoadImage pointed at a path that
+                        # doesn't exist on the ComfyUI host silently loads
+                        # nothing, so the render looks fine and quietly
+                        # ignores the reference.
+                        work, note = apply_reference(work, cfg, reference_image_path,
+                                                     scene_image_path,
+                                                     upload=client.upload_image,
+                                                     prompt=prompt_positive)
+                        if note and note not in warnings:
+                            warnings.append(note)
+                    prompt_id = client.queue_prompt(work)
+                    history = client.wait_for_completion(prompt_id)
+                    refs = client.extract_image_refs(history)
+                    if not refs:
+                        warnings.append(f"seed {seed}: no images returned")
+                        continue
+                    filename, subfolder, folder_type = refs[0]
+                    img = Image.open(io.BytesIO(
+                        client.fetch_image_bytes(filename, subfolder, folder_type)))
+                    variants.append(Variant(_save_image(img, cfg.images_dir, label, seed),
+                                            seed, label))
+                except ComfyClientError as error:
+                    warnings.append(f"seed {seed}: {error}")
+        finally:
+            try:
+                client.release_memory(unload_models=True, free_memory=True)
+            except ComfyClientError as error:
+                warnings.append(f"GPU memory cleanup warning: {error}")
 
     return GenerationResult(variants, warnings)
 

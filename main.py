@@ -271,9 +271,16 @@ def clare_workspace_fragment(handoff, dossier=None):
                     if consolidation:
                         verdict = consolidation.get("verdict", "revise")
                         trial_notes = ''.join('<li><b>' + esc(note.get("trial", "Trial")) + ':</b> ' + esc(note.get("verdict", "")) + ' — ' + esc(note.get("note", "")) + '</li>' for note in consolidation.get("trial_reviews", []))
-                        review_html += '<div class="notice ' + ('good' if verdict == 'approved' else 'warn') + '"><b>Clare’s consolidation decision: ' + esc(verdict.upper()) + '.</b><p>' + esc(consolidation.get("summary", "")) + '</p><ul>' + trial_notes + '</ul></div>'
+                        diagnosis = consolidation.get("diagnosis", "mixed").replace("_", " ")
+                        attempt = consolidation.get("local_attempt", 0)
+                        tracker = ''
+                        if verdict == 'revise':
+                            tracker = '<p class="clare-attempt"><b>Local refinement attempt ' + str(attempt) + ' of 5.</b> Diagnosis: ' + esc(diagnosis) + '. ' + ('The local-model limit is reached. Do not rerender locally; reassess an alternative image model or workflow.' if consolidation.get("local_limit_reached") else 'You may realign and rerender locally if the written specification is sound.') + '</p>'
+                        review_html += '<div class="notice ' + ('good' if verdict == 'approved' else 'warn') + '"><b>Clare’s consolidation decision: ' + esc(verdict.upper()) + '.</b><p>' + esc(consolidation.get("summary", "")) + '</p>' + tracker + '<ul>' + trial_notes + '</ul></div>'
                         if verdict == 'approved' and not consolidation.get("locked"):
                             review_html += '<form hx-post="/clare/character/consolidate/lock" hx-target="#clare-workspace"><input type="hidden" name="character_id" value="' + esc(selected_character) + '"><button>Approve and lock this character reference set</button><small>This records the four approved references in the production book for downstream scene work.</small></form>'
+                        elif verdict == 'revise' and consolidation.get("local_limit_reached"):
+                            review_html += '<section class="clare-model-rethink"><h4>Local refinement limit reached</h4><p>Five rejected local refinement attempts have been recorded. Preserve the current brief and selected evidence; the next action is a controlled model/workflow comparison, not another local rerender.</p></section>'
                         elif verdict == 'revise':
                             pending = state.get("character_revision_alignment", {}).get(selected_character, {})
                             if pending:
@@ -915,6 +922,14 @@ async def consolidate_clare_character_trials(character_id: Annotated[str, Form()
         review = await asyncio.to_thread(specialists.clare_consolidate_character_trials, current.harry_provider, brief, selected)
     except specialists.SpecialistError as error:
         return '<div class="notice warn">' + esc(error) + '</div>'
+    prior_attempts = int(state.get("character_local_rejection_attempts", {}).get(character_id, 0) or 0)
+    if review.get("verdict") == "revise":
+        review["local_attempt"] = prior_attempts + 1
+        review["local_limit_reached"] = review["local_attempt"] >= 5
+        state.setdefault("character_local_rejection_attempts", {})[character_id] = review["local_attempt"]
+    else:
+        review["local_attempt"] = prior_attempts
+        review["local_limit_reached"] = False
     state.setdefault("character_consolidation", {})[character_id] = review
     save_clare_development(current.active_project_id, state)
     event("Clare completed the four-reference consolidation review for " + character_id + ".")
@@ -952,8 +967,11 @@ async def confirm_clare_character_alignment(character_id: Annotated[str, Form()]
     handoff = load_clare_handoff(current.active_project_id) or {}
     character = next((item for item in handoff.get("characters", []) if str(item.get("suggested_id")) == character_id), None)
     brief = state.get("character_briefs", {}).get(character_id)
+    consolidation = state.get("character_consolidation", {}).get(character_id, {})
     if not alignment or not character or not brief or len(trials) != 4:
         return '<div class="notice warn">Clare’s proposed realignment and all four trials are required before rendering.</div>'
+    if consolidation.get("local_limit_reached"):
+        return '<div class="notice warn">The five-attempt local refinement limit has been reached. Do not rerender locally; start a model/workflow reassessment instead.</div>'
     event("Director confirmed Clare’s written realignment; revised character trials are starting for " + character_id + ".")
     failures = []
     instruction = alignment.get("rerender_instruction", "")

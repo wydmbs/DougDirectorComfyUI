@@ -136,13 +136,13 @@ def load_dossier(library_dir):
 
 
 def clare_consolidate_character_trials(provider, brief, selected):
-    system = """You are Clare, a rigorous casting and costume director. Inspect four selected character reference images as one proposed identity set. Judge against the supplied character brief, not generic visual appeal. Verify that each selected image meets its trial purpose and that all four describe one consistent character. Hard-fail wrong species/anatomy or stance, unwanted extra central character, missing required costume/identity features, generic cartoon/CGI finish, or incompatible identity between selections. Return JSON only: {"verdict":"approved" or "revise", "summary":"...", "trial_reviews":[{"trial":"...","verdict":"pass" or "revise","note":"specific evidence and correction"}], "lock_note":"what is locked if approved"}."""
+    system = """You are Clare, a rigorous casting and costume director. Inspect four selected character reference images as one proposed identity set. Judge against the supplied character brief, not generic visual appeal. Verify that each selected image meets its trial purpose and that all four describe one consistent character. Hard-fail wrong species/anatomy or stance, unwanted extra central character, missing required costume/identity features, generic cartoon/CGI finish, or incompatible identity between selections. Return JSON only: {"verdict":"approved" or "revise", "diagnosis":"brief_conflict", "prompt_adherence", "identity_drift", "model_capability", or "mixed", "summary":"...", "trial_reviews":[{"trial":"...","verdict":"pass" or "revise","note":"specific evidence and correction"}], "lock_note":"what is locked if approved"}."""
     images = [{"path": item.get("path"), "role": item.get("trial"), "media_type": mimetypes.guess_type(item.get("path") or "")[0] or "image/jpeg"} for item in selected]
     try:
         result = _json(harry._chat_with_images(provider, system, json.dumps({"brief": brief, "selected_trials": [{"trial": item.get("trial")} for item in selected]}, indent=2), images))
     except harry.HarryError as error:
         raise SpecialistError(str(error)) from error
-    if not isinstance(result, dict) or result.get("verdict") not in {"approved", "revise"} or not isinstance(result.get("trial_reviews"), list):
+    if not isinstance(result, dict) or result.get("verdict") not in {"approved", "revise"} or result.get("diagnosis") not in {"brief_conflict", "prompt_adherence", "identity_drift", "model_capability", "mixed"} or not isinstance(result.get("trial_reviews"), list):
         raise SpecialistError("Clare returned an incomplete consolidation review. Please try again.")
     result["created_at"] = _now()
     result["locked"] = False

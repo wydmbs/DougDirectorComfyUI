@@ -166,6 +166,21 @@ class ComfyClient:
         except (urllib.error.URLError, OSError):
             pass
 
+    def release_memory(self, unload_models: bool = True, free_memory: bool = True) -> None:
+        """Ask ComfyUI to release cached GPU memory after an isolated render batch."""
+        payload = json.dumps({"unload_models": unload_models, "free_memory": free_memory}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/free", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=30):
+                pass
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:300]
+            raise ComfyClientError(f"ComfyUI could not release GPU memory ({error.code}): {detail}") from error
+        except (urllib.error.URLError, OSError) as error:
+            raise ComfyClientError(f"Could not ask ComfyUI to release GPU memory: {error}") from error
+
     def wait_for_completion(self, prompt_id: str, timeout_s: int = 600, poll_s: float = 2.0,
                             on_progress=None) -> dict:
         """Poll /history until the prompt shows up with outputs, or timeout."""

@@ -66,6 +66,8 @@
       .clare-revision-response{display:grid!important;gap:.7rem!important;border-top:1px solid #5b21b6;padding-top:.8rem}.clare-revision-response label{display:grid;gap:.35rem;color:#ddd6fe}.clare-revision-response textarea{width:100%;border:1px solid #475569;border-radius:.55rem;background:#090d1a;padding:.65rem;color:#f8fafc;font:inherit}.clare-revision-response p{margin:0;color:#cbd5e1;font-size:.82rem}
     
       .clare-alignment{display:grid;gap:.8rem;border-top:1px solid #7c3aed;padding-top:1rem}.clare-alignment h4,.clare-alignment p{margin:0}.clare-alignment>div{display:grid;grid-template-columns:1fr 1fr;gap:.7rem}.clare-alignment article{border:1px solid #475569;border-radius:.6rem;background:#0b1323;padding:.7rem}.clare-alignment article>b{color:#ddd6fe;font-size:.8rem}.clare-alignment li{margin:.35rem 0}@media(max-width:800px){.clare-alignment>div{grid-template-columns:1fr}}
+    
+      .clare-attempt{border-left:2px solid #f59e0b;padding:.45rem .65rem;background:#29210d;color:#fde68a!important}.clare-model-rethink{display:grid;gap:.5rem;border:1px solid #f59e0b;border-radius:.7rem;background:#29210d;padding:.85rem;color:#fde68a}.clare-model-rethink h4,.clare-model-rethink p{margin:0}.clare-model-rethink p{line-height:1.45}
     </style>
 </head>
 <body class="min-h-screen bg-[radial-gradient(circle_at_10%_0%,#24204a_0%,#090d1a_40%,#050814_100%)] text-slate-100" x-data="{tab:'harry',settings:false}" @open-call-sheet.window="tab='harry'" @open-clare.window="tab='clare'; $nextTick(()=>htmx.trigger(document.getElementById('clare-workspace'),'clare-refresh'))">
