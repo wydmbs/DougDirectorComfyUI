@@ -104,6 +104,11 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
     concept, which anchors the background through img2img. Either can be passed
     while conditioning is off; that isn't an error, but it is reported as a
     warning so a run never silently pretends a reference was honoured.
+
+    When reference_conditioning is set to "gpt_sunburst" and a reference image
+    is given, this bypasses ComfyUI entirely for those variants and calls
+    GPT Image 2.5 Sunburst's cloud edit endpoint instead -- see
+    reference_conditioning.EXTERNAL_MODES and gpt_image_client.edit_image().
     """
     base_seed = int(base_seed) if base_seed not in (None, "") else random.randint(0, 2**31 - 1)
     n_variants = max(1, min(int(n_variants), 8))
@@ -111,7 +116,14 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
     variants, warnings = [], []
     client = workflow = None
 
-    if not cfg.mock_mode:
+    from reference_conditioning import is_external
+    external_reference = bool(reference_image_path) and is_external(cfg) and not cfg.mock_mode
+    # Sunburst's render happens on OpenAI's side, so a ComfyUI workflow and
+    # connection are neither required nor consulted for these variants -- only
+    # skip building/opening them when there's actually a reference image to
+    # send, so a call with none still falls through to the normal FLUX path
+    # rather than failing for a mode setting it doesn't need yet.
+    if not external_reference and not cfg.mock_mode:
         if not cfg.workflow_json_path or not os.path.exists(cfg.workflow_json_path):
             raise EngineError(
                 "No workflow file is set up yet. Go to Setup and either upload one or turn Mock Mode back on."
@@ -128,6 +140,24 @@ def generate(cfg, label: str, prompt_positive: str, prompt_negative: str = "",
         if cfg.mock_mode:
             path = _save_image(_mock_image(label, prompt_positive, seed), cfg.images_dir, label, seed)
             variants.append(Variant(path, seed, label))
+            continue
+
+        if external_reference:
+            # Sunburst has no seed parameter, so every "variant" here is a
+            # fresh call rather than a seeded rerun -- expect near-duplicates,
+            # not the controlled spread ComfyUI's sampler gives you.
+            from gpt_image_client import GptImageError, edit_image
+            if index == 0:
+                from reference_conditioning import review_instruction
+                shape = review_instruction(prompt_positive, cfg)
+                if shape:
+                    warnings.append(shape)
+            try:
+                data = edit_image(reference_image_path, prompt_positive)
+                img = Image.open(io.BytesIO(data))
+                variants.append(Variant(_save_image(img, cfg.images_dir, label, seed), seed, label))
+            except GptImageError as error:
+                warnings.append(f"seed {seed}: {error}")
             continue
 
         try:

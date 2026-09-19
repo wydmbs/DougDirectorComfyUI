@@ -6,7 +6,7 @@ Without it, "the same pig, angrier" is just the words "a pig, angry" with a
 different seed, and every character drifts. With it, the ChatGPT turnaround
 sheet drives IP-Adapter-Plus and the face survives into a new composition.
 
-Three ways in, because they do different jobs:
+Four ways in, because they do different jobs:
 
   Kontext      the character's identity, exactly. The reference is VAE-encoded
                into a full latent grid and rides along in the sequence the
@@ -16,6 +16,9 @@ Three ways in, because they do different jobs:
                tokens -- a summary of the picture, not the picture. Costume
                detail, button count and comb shape do not survive that
                bottleneck at any weight.
+  GPT Sunburst the character's identity, via a cloud edit call instead of a
+               local graph. Same instruction-not-description shape as
+               Kontext, but it never touches the workflow -- see below.
   img2img      the scene's look. Fed the environment concept, at low denoise
                so the layout and palette hold.
 
@@ -23,7 +26,18 @@ Kontext and IP-Adapter are not two settings of one thing; they are different
 mechanisms, which is why turning the adapter weight up never closes the gap.
 Kontext is an edit model, so it wants an instruction ("turn him to face left")
 rather than a fresh description of the scene -- re-describing the character
-makes it redraw instead of transform.
+makes it redraw instead of transform. GPT Sunburst wants the same shape of
+instruction for the same reason -- it is also an edit model, just reached over
+the network instead of loaded into this graph.
+
+GPT Sunburst is the odd one out mechanically: it is not a node this module can
+wire into the workflow, because the whole render happens on OpenAI's side.
+apply_reference() therefore does nothing to the graph for this mode and
+returns a warning saying so -- the actual call lives in
+gpt_image_client.edit_image(), invoked by director_engine.generate() *instead
+of* queuing a ComfyUI prompt for that variant. Everything else in this module
+(describe_mode, review_instruction, IDENTITY_MODES) still treats it as a real
+identity mode; only the graph-patching functions don't apply to it.
 
 The workflow has to actually contain the nodes. When it doesn't, the caller
 gets a message naming exactly what to add -- never a silent no-op that looks
@@ -35,12 +49,23 @@ import os
 MODE_OFF = "off"
 MODE_IPADAPTER = "ipadapter"
 MODE_KONTEXT = "kontext"
+MODE_GPT_SUNBURST = "gpt_sunburst"
 MODE_IMG2IMG = "img2img"
 MODE_BOTH = "both"
-SUPPORTED_MODES = (MODE_OFF, MODE_KONTEXT, MODE_IPADAPTER, MODE_IMG2IMG, MODE_BOTH)
+SUPPORTED_MODES = (MODE_OFF, MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST, MODE_IMG2IMG, MODE_BOTH)
 
 # The modes that carry a character's identity, whichever mechanism they use.
-IDENTITY_MODES = (MODE_KONTEXT, MODE_IPADAPTER, MODE_BOTH)
+IDENTITY_MODES = (MODE_KONTEXT, MODE_IPADAPTER, MODE_GPT_SUNBURST, MODE_BOTH)
+
+# Modes whose render happens off a call this module doesn't make, rather than
+# by patching the ComfyUI graph. director_engine checks this before it builds
+# a workflow at all, so callers never queue a ComfyUI prompt for a variant
+# Sunburst is about to generate on its own.
+EXTERNAL_MODES = (MODE_GPT_SUNBURST,)
+
+
+def is_external(cfg) -> bool:
+    return _mode(cfg) in EXTERNAL_MODES
 
 # Node classes that accept a reference, most specific first.
 #
@@ -105,6 +130,17 @@ def apply_reference(workflow: dict, cfg, reference_image_path: str,
             return workflow, ("reference conditioning is off, so this was generated from the "
                               "text prompt only -- turn it on in Setup to hold continuity")
         return workflow, ""
+
+    if mode in EXTERNAL_MODES:
+        # Sunburst's render happens over the network, not in this graph -- a
+        # caller that reaches here without checking is_external() first (the
+        # normal path skips this function entirely for external modes) gets a
+        # clear "nothing happened here" rather than a workflow that silently
+        # ignored the reference.
+        return workflow, (
+            f"reference conditioning is set to '{mode}', which renders through a cloud call "
+            f"rather than this workflow -- call gpt_image_client.edit_image() directly instead "
+            f"of queuing this graph")
 
     if not reference_image_path and not scene_image_path:
         return workflow, ""
@@ -345,6 +381,8 @@ def describe_mode(cfg) -> str:
         MODE_KONTEXT: ("Kontext — the reference is encoded into the sequence being generated, "
                        "so the character survives intact."),
         MODE_IPADAPTER: "IP-Adapter — the reference guides identity, approximately.",
+        MODE_GPT_SUNBURST: ("GPT Image 2.5 Sunburst — a cloud edit call holds identity instead "
+                            "of a local graph; costs API credits and has no seed."),
         MODE_IMG2IMG: "img2img — the scene concept anchors the background.",
         MODE_BOTH: "IP-Adapter + img2img — identity from the reference, look from the scene.",
     }.get(_mode(cfg), f"Unknown mode '{_mode(cfg)}'.")
@@ -403,9 +441,13 @@ def review_instruction(prompt: str, cfg) -> str:
     came back with the waistcoat turned into a lapelled jacket. The instruction
     alone kept the waistcoat, its three brass buttons and the studio light.
 
+    Sunburst gets the same review as Kontext: it is also an edit model reading
+    an instruction against a reference, and the same "don't describe what
+    should survive" logic applies to why it drifts.
+
     Returns "" when the prompt is shaped the way the model wants.
     """
-    if _mode(cfg) != MODE_KONTEXT or not (prompt or "").strip():
+    if _mode(cfg) not in (MODE_KONTEXT, MODE_GPT_SUNBURST) or not (prompt or "").strip():
         return ""
 
     text = prompt.strip()

@@ -190,9 +190,18 @@ def build_pipeline_tools(cfg, video_fn=None) -> list:
 
     def check_reference_setup() -> str:
         """Can the configured workflow actually hold a character's identity?"""
-        from reference_conditioning import describe_mode, inspect_workflow
+        from reference_conditioning import describe_mode, inspect_workflow, is_external
 
         report = {"mode": describe_mode(cfg)}
+        if is_external(cfg):
+            import gpt_image_client
+            status = gpt_image_client.readiness()
+            report.update(status)
+            report["verdict"] = (
+                "Ready — Sunburst holds identity via a cloud edit call, no ComfyUI workflow "
+                "needed for these variants." if status["api_key_present"] else
+                "OPENAI_API_KEY isn't set, so Sunburst calls will fail. Set it and restart.")
+            return json.dumps(report, indent=2)
         path = cfg.workflow_json_path
         if not path or not os.path.exists(path):
             report["workflow"] = "none configured"

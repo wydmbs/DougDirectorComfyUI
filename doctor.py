@@ -370,6 +370,23 @@ def check_kontext(report, section, info, classes, options):
                    "Put the FLUX ae.safetensors in ComfyUI/models/vae.")
 
 
+def check_gpt_sunburst(report, cfg):
+    from reference_conditioning import MODE_GPT_SUNBURST
+
+    if getattr(getattr(cfg, "agent", None), "reference_conditioning", "") != MODE_GPT_SUNBURST:
+        return
+    section = "GPT Sunburst"
+    import gpt_image_client
+    status = gpt_image_client.readiness()
+    if status["api_key_present"]:
+        report.add(section, OK, f"OPENAI_API_KEY is set; model {status['model']}")
+    else:
+        report.add(section, FAIL, "OPENAI_API_KEY is not set",
+                   "reference_conditioning is set to gpt_sunburst, but there's no key to call it with.",
+                   "Set OPENAI_API_KEY in this app's environment and restart it -- "
+                   "same key Harry's OpenAI provider reads.")
+
+
 def check_workflow(report, cfg, classes):
     section = "Keyframe workflow"
     path = cfg.workflow_json_path
@@ -594,6 +611,7 @@ def main():
     client, classes = check_comfy(report, cfg)
     check_models(report, client, classes)
     check_workflow(report, cfg, classes)
+    check_gpt_sunburst(report, cfg)
     check_video(report, cfg, classes)
     check_registry(report, cfg)
     return report.render()
